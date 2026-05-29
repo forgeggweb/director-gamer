@@ -7800,6 +7800,10 @@ async function handleSpriteImport(id, input) {
   toast(`🖼 Spritesheet cargado`);
   updateRightPanel();
   input.value = '';
+  // Disparar full sync con imagen para que el co-director la reciba
+  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
+    setTimeout(() => CD._sendProjectToRoom(), 120);
+  }
 }
 
 function updateSpriteCfg(id, key, val) {
@@ -8352,6 +8356,10 @@ async function handleFrameFiles(id, idx, input) {
   toast(`🖼 ${loaded} frame${loaded>1?'s':''} cargado${loaded>1?'s':''}`);
   addLog('info', `${loaded} frames cargados en animación "${anim.name}".`);
   input.value = '';
+  // Full sync para que el co-director reciba los frames
+  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
+    setTimeout(() => CD._sendProjectToRoom(), 150);
+  }
 }
 
 function handleFrameDrop(e, id, idx) {
@@ -8454,6 +8462,10 @@ async function handleGifFile(id, idx, input) {
   toast(`🎞 GIF "${file.name}" cargado`);
   addLog('info', `GIF "${file.name}" asignado a animación "${o.animations[idx].name}".`);
   input.value = '';
+  // Full sync para que el co-director reciba el GIF
+  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
+    setTimeout(() => CD._sendProjectToRoom(), 150);
+  }
 }
 
 function handleGifDrop(e, id, idx) {
@@ -11321,12 +11333,16 @@ function setIdbStatus(ok) {
   }
 })();
 
-/* ── Patch addAssetToLib to also persist ── */
+/* ── Patch addAssetToLib to also persist and sync ── */
 const _origAddAssetToLib = addAssetToLib;
 window.addAssetToLib = function(asset) {
   _origAddAssetToLib(asset);
   idbSaveAsset(asset);
   renderTagFilterRow();
+  // Full sync con el co-director para que reciba el nuevo asset con su imagen
+  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
+    setTimeout(() => CD._sendProjectToRoom(), 200);
+  }
 };
 
 /* ── Patch deleteAsset to also remove from IDB ── */
@@ -16115,7 +16131,11 @@ function _applyProjectData(data, _fromCD) {
       }
     }
     STATE.objects = [];
-    if (typeof _restoreAssets === 'function') _restoreAssets(data);
+    // Solo restaurar assets si el payload los trae (full sync).
+    // En updates incrementales (sin assets) conservar los existentes.
+    if (data.assets !== undefined && typeof _restoreAssets === 'function') {
+      _restoreAssets(data);
+    }
     for (const o of (data.objects || [])) {
       STATE.objects.push(o);
       if (typeof renderWorldObj === 'function') renderWorldObj(o);
@@ -21774,7 +21794,10 @@ const CD = {
   },
 
   doAction() {
-    this.myName = (document.getElementById('cd-my-name').value || '').trim() || 'Director';
+    const prof = this._getProfile();
+    // Preferir el nombre del perfil guardado; el campo del modal es solo fallback
+    const inputName = (document.getElementById('cd-my-name').value || '').trim();
+    this.myName = prof.name || inputName || 'Director';
     if (this.mode === 'host') this._createSession();
     else this._joinSession();
   },
@@ -22021,14 +22044,29 @@ const CD = {
     this._patchCommandHistory();
   },
 
-  /* ── Enviar proyecto actual a la sala ── */
+  /* ── Enviar proyecto completo a la sala (incluye assets con imágenes) ── */
   _sendProjectToRoom() {
-    if (!this.socket || !this.isHost) return;
+    if (!this.socket) return;
     const data = _buildSaveData();
     data._fromSocketId = this.socket.id;
-    data._sessionCode  = this.sessionCode; // para que el servidor sepa a qué sala enviar
+    data._sessionCode  = this.sessionCode;
+    data._isFullSync   = true; // flag: payload completo con assets
     this.socket.emit('project-update', data);
     this._log(`📤 Canvas sincronizado con la sala`);
+  },
+
+  /* ── Construir payload liviano para updates incrementales ── */
+  /* Los objetos conservan imgUrl/spriteSheet.url para que el receptor muestre texturas.
+     Se omite el array ASSETS completo (que puede pesar MB) porque ya fue enviado
+     en el project-load inicial. Solo se re-envían assets en full syncs. */
+  _buildLightPayload() {
+    const data = _buildSaveData();
+    // Quitar assets del payload incremental — ya los tiene el receptor del project-load
+    // Esto reduce el tamaño de cada update de potencialmente 5MB a <50KB
+    delete data.assets;
+    data._fromSocketId = this.socket?.id;
+    data._sessionCode  = this.sessionCode;
+    return data;
   },
 
   /* ── Hookear CommandHistory + canvasMove para sync en tiempo real ── */
@@ -22042,9 +22080,7 @@ const CD = {
       clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
         if (!this.connected || !this.socket) return;
-        const payload = _buildSaveData();
-        payload._fromSocketId = this.socket.id;
-        payload._sessionCode  = this.sessionCode; // necesario para que el servidor sepa a qué sala enviar
+        const payload = this._buildLightPayload();
         this.socket.emit('project-update', payload);
       }, 180);
     };
@@ -22055,12 +22091,10 @@ const CD = {
       clearTimeout(this._dragSyncTimer);
       this._dragSyncTimer = setTimeout(() => {
         if (!this.connected || !this.socket) return;
-        const payload = _buildSaveData();
-        payload._fromSocketId = this.socket.id;
-        payload._sessionCode  = this.sessionCode;
-        payload._isDragUpdate = true; // flag para que el receptor no lo muestre como carga completa
+        const payload = this._buildLightPayload();
+        payload._isDragUpdate = true;
         this.socket.emit('project-update', payload);
-      }, 40); // 40ms ≈ 25fps durante drag
+      }, 40);
     };
 
     // 1) CommandHistory.execute — add, delete, setprop vía inspector
@@ -22547,9 +22581,15 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <!-- SERVIDOR: exponer eventos necesarios en server.js
+
+  // ── IMPORTANTE: configurar buffer grande para soportar texturas base64 ──
+  // const io = new Server(server, {
+  //   maxHttpBufferSize: 50e6,  // 50 MB — necesario para sync de texturas/spritesheets
+  //   cors: { origin: '*' }
+  // });
+
   // ── Perfiles de peers (CRÍTICO para mostrar nombres e imágenes) ──
   socket.on('peer-profile', ({ sessionCode, profile, name, targetId }) => {
-    // Si targetId existe, enviar solo a ese socket; si no, broadcast a toda la sala
     if (targetId) socket.to(targetId).emit('peer-profile', { fromId: socket.id, profile, name });
     else          socket.to(sessionCode).emit('peer-profile', { fromId: socket.id, profile, name });
   });
@@ -22557,7 +22597,9 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on('request-profiles', ({ sessionCode, fromId }) => {
     socket.to(sessionCode).emit('request-profiles', { fromId: socket.id });
   });
-  // ── project-update BIDIRECCIONAL: cualquier participante puede emitir ──
+  // ── project-update BIDIRECCIONAL ──
+  // Los updates incrementales NO tienen assets (ligeros).
+  // Los full sync (carga de texturas) SÍ tienen assets (hasta 50MB).
   socket.on('project-update', (data) => {
     const code = data._sessionCode;
     if (code) socket.to(code).emit('project-update', { ...data, _fromSocketId: socket.id });
