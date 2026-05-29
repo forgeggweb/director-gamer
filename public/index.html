@@ -16329,26 +16329,19 @@ document.addEventListener('DOMContentLoaded', function initEtapa5() {
   updateStatusBar();
   addLog('info', '✦ Director Gamer Etapa 7 — GameState Machine cargada.');
 
-  // ── Login gate: el acceso a la app requiere nombre + PIN ──
-  // Intentar restaurar sesión guardada en este dispositivo
-  const _savedSession = DGL._tryRestoreSession();
-  if (_savedSession && _savedSession.uid) {
-    // Sesión válida — aplicar namespace y abrir selector de perfil directamente
-    _applyProfileNamespace(_savedSession.uid);
-    openProfileSelector();
-  } else {
-    // Sin sesión — mostrar login primero, luego abrir selector de perfil
-    const _origOpenProfileSelector = openProfileSelector;
-    // Bloquear openProfileSelector hasta que el login complete
-    window.openProfileSelector = function() { /* bloqueado hasta login */ };
-    const _origDglClose = DGL.close.bind(DGL);
-    DGL.close = function() {
-      window.openProfileSelector = _origOpenProfileSelector;
-      _origDglClose();
-      _origOpenProfileSelector();
-    };
-    DGL.open();
-  }
+  // ── Login gate: SIEMPRE se requiere nombre + PIN antes de acceder ──
+  // El selector de perfiles solo se abre DESPUÉS de validar el PIN correctamente.
+  // Nunca se salta el login aunque haya sesión guardada.
+  const _origOpenProfileSelector = openProfileSelector;
+  window.openProfileSelector = function() { /* bloqueado hasta que el login valide el PIN */ };
+  const _origDglClose = DGL.close.bind(DGL);
+  DGL.close = function() {
+    // Solo se llama desde dglSubmit() tras validar PIN — restaurar y abrir perfiles
+    window.openProfileSelector = _origOpenProfileSelector;
+    _origDglClose();
+    _origOpenProfileSelector();
+  };
+  DGL.open();
 });
 
 
@@ -20972,16 +20965,28 @@ window.openWelcome = function() {
 
     /* Abrir pantalla de login */
     open() {
+      // Siempre mostrar el login. Si hay sesión guardada, pre-rellenar el nombre
+      // pero SIEMPRE pedir el PIN — nunca saltear la autenticación.
       const saved = _tryRestoreSession();
-      if (saved) {
-        // Mostrar nombre guardado y opción de cambiar
+      if (saved && saved.username) {
         document.getElementById('dgl-saved-name').textContent = saved.username;
         document.getElementById('dgl-session-info').style.display = 'block';
         document.getElementById('dgl-username').value = saved.username;
+        // Ocultar campo de nombre (ya guardado), pero el PIN siempre es requerido
         document.getElementById('dgl-username').closest('.dgl-fields').children[0].style.display = 'none';
-        document.getElementById('dgl-enter-btn').disabled = false;
-        document.getElementById('dgl-enter-btn').textContent = '✦ Continuar como ' + saved.username;
+        document.getElementById('dgl-enter-btn').disabled = true; // requiere PIN válido
+        document.getElementById('dgl-enter-btn').textContent = '✦ Ingresar PIN para continuar';
+      } else {
+        // Nueva sesión — mostrar todos los campos
+        document.getElementById('dgl-session-info').style.display = 'none';
+        document.getElementById('dgl-enter-btn').disabled = true;
+        document.getElementById('dgl-enter-btn').textContent = '✦ Entrar al engine';
       }
+      // Limpiar PIN siempre (nunca pre-rellenar por seguridad)
+      ['dgl-pin-1','dgl-pin-2','dgl-pin-3','dgl-pin-4'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.value = ''; el.classList.remove('filled'); }
+      });
       document.getElementById('dg-login-overlay').classList.remove('hidden');
       setTimeout(() => {
         const first = document.getElementById('dgl-pin-1');
