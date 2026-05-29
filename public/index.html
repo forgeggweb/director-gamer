@@ -21803,6 +21803,10 @@ const CD = {
 
     // Recibir cambios en tiempo real
     this.socket.on('project-update', data => {
+      // El host es la fuente de verdad: ignora project-update ajenos para no ser sobreescrito
+      if (this.isHost) return;
+      // Ignorar echo del propio socket (el servidor puede devolver el mensaje al emisor)
+      if (data._fromSocketId && data._fromSocketId === this.socket?.id) return;
       this._broadcasting = true;
       _applyProjectData(data, true);
       // Reset después del rAF de _applyProjectData para no re-emitir el propio update
@@ -21859,7 +21863,7 @@ const CD = {
       }
     }, 300);
 
-    // Hookear CommandHistory para sync automático
+    // Hookear CommandHistory para sync automático (host y guests)
     this._patchCommandHistory();
   },
 
@@ -21882,7 +21886,10 @@ const CD = {
       clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
         if (!this.connected || !this.socket) return;
-        this.socket.emit('project-update', _buildSaveData());
+        const payload = _buildSaveData();
+        // Incluir el socketId para que el receptor ignore el echo propio
+        payload._fromSocketId = this.socket.id;
+        this.socket.emit('project-update', payload);
       }, 200);
     };
 
