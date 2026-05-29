@@ -20884,26 +20884,33 @@ window.openWelcome = function() {
     return Math.abs(h).toString(16).padStart(8, '0');
   }
 
-  /* ── ID de dispositivo: único por navegador, persiste en localStorage ── */
+  /* ── ID de dispositivo: único por pestaña/sesión de navegador ── */
+  /* Usa sessionStorage (por pestaña) + un sufijo aleatorio por sesión,       */
+  /* así dos pestañas abiertas en el mismo navegador obtienen IDs distintos.  */
   function _getOrCreateDeviceId() {
     try {
-      let did = localStorage.getItem(DEVICE_KEY);
+      // Intentar recuperar el ID de esta pestaña desde sessionStorage
+      let did = sessionStorage.getItem(DEVICE_KEY);
       if (!did) {
-        // Generar ID aleatorio robusto
-        const arr = new Uint8Array(12);
+        // Generar ID aleatorio robusto y único por sesión/pestaña
+        const arr = new Uint8Array(16);
         crypto.getRandomValues(arr);
         did = 'dev_' + Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
-        localStorage.setItem(DEVICE_KEY, did);
+        sessionStorage.setItem(DEVICE_KEY, did);
       }
       return did;
     } catch(e) {
-      // Fallback si localStorage falla
-      return 'dev_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+      // Fallback: Math.random combinado (suficientemente único para uso práctico)
+      if (!window._DG_FALLBACK_DEVICE_ID) {
+        window._DG_FALLBACK_DEVICE_ID = 'dev_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      }
+      return window._DG_FALLBACK_DEVICE_ID;
     }
   }
 
   /* ── Genera un userId estable a partir de nombre + PIN + deviceId ── */
-  /* El deviceId garantiza que dos usuarios con mismo nombre/PIN no colisionan */
+  /* El deviceId (por pestaña) garantiza que dos sesiones distintas            */
+  /* -incluso en el mismo navegador- no colisionan entre sí.                   */
   function _makeUserId(username, pin) {
     const deviceId = _getOrCreateDeviceId();
     return 'u_' + _hash(username.trim().toLowerCase() + ':' + pin + ':' + deviceId);
@@ -21832,13 +21839,17 @@ const CD = {
     // peers-updated: el servidor manda [{id, name, role, profile?}]
     // Si el servidor no soporta profile aún, los pedimos por canal propio
     this.socket.on('peers-updated', peers => {
+      // Contar cuántos peers conocíamos antes del merge
+      const prevPeerCount = Object.keys(this._peers).length;
       this._mergePeers(peers);
       this._renderDirectors(peers);
       this._log(`👥 ${peers.length} director${peers.length !== 1 ? 'es' : ''} en sesión`);
 
-      // HOST: reenviar proyecto cuando llega un nuevo guest
-      if (this.isHost && peers.length > 1) {
-        this._sendProjectToRoom();
+      // HOST: reenviar el estado actual del proyecto cada vez que llega un nuevo guest
+      // Se detecta comparando el total actual vs el anterior
+      if (this.isHost && peers.length > prevPeerCount) {
+        // Pequeño delay para asegurar que el guest ya procesó la conexión
+        setTimeout(() => this._sendProjectToRoom(), 250);
       }
 
       // Anunciar nuestro propio perfil a los nuevos
@@ -21938,8 +21949,10 @@ const CD = {
   _sendProjectToRoom() {
     if (!this.socket || !this.isHost) return;
     const data = _buildSaveData();
-    this.socket.emit('project-load', data);
-    this._log(`📤 Re-enviando "${data.projectName}" a la sala`);
+    // Incluir socketId para filtrar el echo en el host
+    data._fromSocketId = this.socket.id;
+    this.socket.emit('project-update', data);
+    this._log(`📤 Canvas sincronizado con la sala`);
   },
 
   /* ── Hookear CommandHistory + eventos de canvas para sync en tiempo real ── */
@@ -21947,12 +21960,13 @@ const CD = {
     if (this._cmdPatchDone) return;
     this._cmdPatchDone = true;
 
-    // Función de emit con debounce
+    // Función de emit con debounce — solo el HOST emite cambios
     const _emit = () => {
       if (!this.connected || this._broadcasting || !this.socket) return;
+      if (!this.isHost) return; // Solo el host es fuente de verdad
       clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket) return;
+        if (!this.connected || !this.socket || !this.isHost) return;
         const payload = _buildSaveData();
         // Incluir el socketId para que el receptor ignore el echo propio
         payload._fromSocketId = this.socket.id;
