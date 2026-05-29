@@ -16324,12 +16324,31 @@ document.addEventListener('DOMContentLoaded', function initEtapa5() {
   }
   // Start autosave
   startAutosave();
-  // Show profile selector (which will open welcome after profile is selected)
-  openProfileSelector();
   // Update status bar periodically
   setInterval(updateStatusBar, 5000);
   updateStatusBar();
   addLog('info', '✦ Director Gamer Etapa 7 — GameState Machine cargada.');
+
+  // ── Login gate: el acceso a la app requiere nombre + PIN ──
+  // Intentar restaurar sesión guardada en este dispositivo
+  const _savedSession = DGL._tryRestoreSession();
+  if (_savedSession && _savedSession.uid) {
+    // Sesión válida — aplicar namespace y abrir selector de perfil directamente
+    _applyProfileNamespace(_savedSession.uid);
+    openProfileSelector();
+  } else {
+    // Sin sesión — mostrar login primero, luego abrir selector de perfil
+    const _origOpenProfileSelector = openProfileSelector;
+    // Bloquear openProfileSelector hasta que el login complete
+    window.openProfileSelector = function() { /* bloqueado hasta login */ };
+    const _origDglClose = DGL.close.bind(DGL);
+    DGL.close = function() {
+      window.openProfileSelector = _origOpenProfileSelector;
+      _origDglClose();
+      _origOpenProfileSelector();
+    };
+    DGL.open();
+  }
 });
 
 
@@ -21050,9 +21069,8 @@ function dglSubmit() {
   // Aplicar namespace de perfiles para este usuario
   _applyProfileNamespace(uid);
 
-  // Cerrar login y abrir selector de perfil
+  // Cerrar login — DGL.close() ya llama openProfileSelector() internamente
   DGL.close();
-  openProfileSelector();
 }
 
 /* ── Aplicar namespace de perfiles para un uid dado ── */
@@ -21079,42 +21097,9 @@ function _applyProfileNamespace(uid) {
 }
 
 /* ── Iniciar: mostrar login antes que cualquier otra cosa ── */
-document.addEventListener('DOMContentLoaded', function() {
-  // Interceptar initEtapa5 para que NO llame openProfileSelector directamente,
-  // sino que primero pase por el login.
-  // Como initEtapa5 ya está registrado, lo que hacemos es abrir el login overlay
-  // inmediatamente y bloquear openProfileSelector hasta que el login complete.
-  const _origOpenProfileSelector = window.openProfileSelector;
-  let _loginDone = false;
-  window.openProfileSelector = function() {
-    if (!_loginDone) return; // bloqueado hasta login
-    _origOpenProfileSelector();
-  };
-
-  // Registrar que cuando DGL cierre, desbloqueamos
-  const _origDglClose = DGL.close.bind(DGL);
-  DGL.close = function() {
-    _loginDone = true;
-    window.openProfileSelector = _origOpenProfileSelector;
-    _origDglClose();
-    // Ahora sí abrir el selector de perfil
-    _origOpenProfileSelector();
-  };
-
-  // Si hay sesión guardada restaurada, aplicar el namespace de perfiles ANTES de abrir la app
-  // (DGL._tryRestoreSession ya fue llamado internamente y seteó _CD_userId, _DG_PSO_PROFILES_KEY, etc.)
-  const _savedSession = DGL._tryRestoreSession();
-  if (_savedSession && _savedSession.uid) {
-    _applyProfileNamespace(_savedSession.uid);
-  }
-
-  // Mostrar el login
-  DGL.open();
-});
+/* ── _applyProfileNamespace: se llama desde initEtapa5 ── */
 </script>
 
-</body>
-</html>
 
 <!-- ═══════════════════════════════════════════════════════
      CO-DIRECTOR — Socket.io / Render
@@ -22435,3 +22420,6 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on('srv-clear', ({ reqId, userId })         => { /* borrar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:null }); });
 -->
 
+
+</body>
+</html>
