@@ -9033,25 +9033,9 @@ async function handleImport(e) {
    SAVE / LOAD
 ════════════════════════════════════ */
 function saveProject() {
-  // La función real es _doSave (definida más abajo en Etapa 5)
-  // Esta versión temprana se usa como fallback
-  const data = {
-    projectName: document.getElementById('proj-name-badge').textContent,
-    objects: STATE.objects,         // ← mantener imgUrl
-    layers: STATE.layers,
-    activeLayer: STATE.activeLayer,
-    assets: ASSETS.map(a => { const c={...a}; delete c.audioEl; return c; }),
-  };
-  try {
-    localStorage.setItem('pm_project', JSON.stringify(data));
-  } catch(err) {
-    if (err.name === 'QuotaExceededError') {
-      toast('⚠️ localStorage lleno. Exporta el proyecto para guardar las texturas.');
-      return;
-    }
-  }
-  toast('💾 Proyecto guardado');
-  addLog('info', 'Proyecto guardado en localStorage.');
+  // Delegado a _doSave real (definida en Etapa 5). Esta versión es el fallback temprano.
+  if (typeof _doSave === 'function') { _doSave(false); return; }
+  toast('⏳ Guardando…');
 }
 
 function _restoreAssets(data) {
@@ -9081,27 +9065,7 @@ function navOpenPanel(tab) {
 }
 
 function openEscena() {
-  const raw = localStorage.getItem('pm_project');
-  if (!raw) { toast('📭 No hay proyecto guardado'); return; }
-  try {
-    const data = JSON.parse(raw);
-    document.getElementById('proj-name-badge').textContent = data.projectName || 'Sin título';
-    STATE.layers = data.layers || STATE.layers;
-    STATE.activeLayer = data.activeLayer || STATE.activeLayer;
-    // clear objects
-    document.getElementById('world-canvas').innerHTML = '';
-    STATE.objects = [];
-    _restoreAssets(data);   // ← restaurar assets primero
-    for (const o of (data.objects||[])) {
-      STATE.objects.push(o);
-      renderWorldObj(o);
-      _applyObjImgUrl(o);   // ← aplicar textura guardada al DOM
-    }
-    renderSceneTree();
-    renderLayers();
-    toast('📂 Proyecto cargado');
-    addLog('info', 'Proyecto cargado desde localStorage.');
-  } catch { toast('❌ Error al cargar'); }
+  openWelcome();
 }
 
 /* ════════════════════════════════════
@@ -15847,39 +15811,44 @@ function refreshSavesList() {
         </div>`).join('');
     }
   }
-  // Local saves
+  // Proyectos en servidor
   const savesEl = document.getElementById('exp-saves-list');
   if (!savesEl) return;
-  const keys = Object.keys(localStorage).filter(k=>k.startsWith('pm_'));
-  if (!keys.length) {
-    savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">Sin guardados locales.</div>';
-    return;
-  }
-  savesEl.innerHTML = keys.map(k=>{
-    const raw = localStorage.getItem(k);
-    const size = (raw.length / 1024).toFixed(1);
-    let pname = k;
-    try { pname = JSON.parse(raw)?.projectName || k; } catch {}
-    return `<div class="exp-progress-item">
-      <span class="epi-status">💾</span>
-      <span class="epi-label">${pname}</span>
-      <span class="epi-size">${size} KB</span>
-    </div>`;
-  }).join('');
-  // Update storage size in settings
-  const lsSize = document.getElementById('sb-ls-size');
-  if (lsSize) {
-    const total = keys.reduce((s,k)=>s+(localStorage.getItem(k)||'').length,0);
-    lsSize.textContent = (total/1024).toFixed(1) + ' KB';
+  savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">⏳ Cargando proyectos del servidor…</div>';
+  if (window._SRV && typeof window._SRV.listProjects === 'function') {
+    window._SRV.listProjects().then(projects => {
+      if (!projects || !projects.length) {
+        savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">Sin proyectos en el servidor.</div>';
+        return;
+      }
+      savesEl.innerHTML = projects.map(p => {
+        const saved = p.savedAt ? new Date(p.savedAt).toLocaleDateString('es') : '';
+        return `<div class="exp-progress-item">
+          <span class="epi-status">☁️</span>
+          <span class="epi-label">${p.projectName || p.id}</span>
+          <span class="epi-size">${saved}</span>
+        </div>`;
+      }).join('');
+      const lsSize = document.getElementById('sb-ls-size');
+      if (lsSize) lsSize.textContent = projects.length + ' proyecto(s)';
+    }).catch(() => {
+      savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">⚠️ Sin conexión al servidor.</div>';
+    });
+  } else {
+    savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">Sin conexión al servidor.</div>';
   }
 }
 
 function clearSaves() {
-  if (!confirm('¿Eliminar todos los guardados locales?')) return;
-  Object.keys(localStorage).filter(k=>k.startsWith('pm_')).forEach(k=>localStorage.removeItem(k));
-  refreshSavesList();
-  toast('🗑 Guardados eliminados');
-  updateStatusBar();
+  if (!confirm('¿Eliminar TODOS los proyectos del servidor? Esta acción no se puede deshacer.')) return;
+  if (window._SRV && typeof window._SRV.clearProjects === 'function') {
+    window._SRV.clearProjects().then(() => {
+      refreshSavesList();
+      toast('🗑 Proyectos eliminados del servidor');
+    });
+  } else {
+    toast('⚠️ Sin conexión al servidor');
+  }
 }
 
 function refreshPreview() {
@@ -15962,10 +15931,12 @@ function applyFontSize(size) {
 }
 
 function clearAllData() {
-  if (!confirm('¿Borrar TODOS los datos de Director Gamer? Esta acción no se puede deshacer.')) return;
-  Object.keys(localStorage).filter(k=>k.startsWith('pm_')).forEach(k=>localStorage.removeItem(k));
-  toast('🗑 Datos eliminados');
-  closeSettings();
+  if (!confirm('¿Borrar TODOS los datos del servidor? Esta acción no se puede deshacer.')) return;
+  if (window._SRV && typeof window._SRV.clearProjects === 'function') {
+    window._SRV.clearProjects().then(() => { toast('🗑 Datos eliminados del servidor'); closeSettings(); });
+  } else {
+    toast('⚠️ Sin conexión al servidor');
+  }
 }
 
 /* ════════════════════════════════════
@@ -15987,39 +15958,43 @@ function stopAutosave() {
   if (autosaveInterval) { clearInterval(autosaveInterval); autosaveInterval = null; }
 }
 
-function _doSave(silent=false) {
-  const data = {
-    projectName: document.getElementById('proj-name-badge').textContent,
-    objects: STATE.objects,   // ← mantener imgUrl y todas las propiedades
-    layers: STATE.layers,
+function _buildSaveData() {
+  return {
+    projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
+    objects:     STATE.objects,
+    layers:      STATE.layers,
     activeLayer: STATE.activeLayer,
-    actors: STATE.actors,
-    rules: RULES,
-    relations: RELATIONS,
-    assets: ASSETS.map(a => {            // ← guardar assets (sin audioEl, no serializable)
-      const copy = {...a};
-      delete copy.audioEl;
-      return copy;
-    }),
-    savedAt: new Date().toISOString(),
+    actors:      STATE.actors,
+    rules:       typeof RULES !== 'undefined' ? RULES : [],
+    relations:   typeof RELATIONS !== 'undefined' ? RELATIONS : [],
+    assets:      (typeof ASSETS !== 'undefined' ? ASSETS : []).map(a => { const c={...a}; delete c.audioEl; return c; }),
+    worldW:      parseInt(document.getElementById('world-canvas')?.style.width)  || 1280,
+    worldH:      parseInt(document.getElementById('world-canvas')?.style.height) || 960,
+    savedAt:     new Date().toISOString(),
   };
-  try {
-    localStorage.setItem('pm_project', JSON.stringify(data));
-  } catch(err) {
-    if (err.name === 'QuotaExceededError') {
-      toast('⚠️ No hay espacio en localStorage. Las texturas son demasiado grandes. Intenta exportar en su lugar.', 5000);
-      addLog('warn', 'Guardado fallido: localStorage lleno. Reduce la cantidad o tamaño de imágenes.');
-      return;
+}
+
+function _doSave(silent=false) {
+  const data = _buildSaveData();
+
+  // ── Guardar via servidor (Socket.io) ──
+  if (window._SRV && typeof window._SRV.saveProject === 'function') {
+    window._SRV.saveProject(data, silent);
+  } else {
+    // Fallback solo si no hay servidor conectado
+    try {
+      localStorage.setItem('pm_project', JSON.stringify(data));
+      addLog('info', '💾 Guardado local (sin servidor).');
+    } catch(err) {
+      toast('⚠️ Error al guardar', 4000);
     }
-    throw err;
   }
+
   lastSaveTime = new Date();
   updateStatusBar();
   if (!silent) {
-    toast('💾 Proyecto guardado');
-    addLog('info', 'Proyecto guardado en localStorage.');
+    toast('💾 Guardando en servidor…');
   }
-  // Show autosave indicator
   const ind = document.getElementById('autosave-indicator');
   if (ind) {
     ind.classList.add('visible');
@@ -16069,28 +16044,83 @@ removeObj = function(id) { _e5_origRemoveObj(id); updateStatusBar(); };
    ETAPA 5 — WELCOME SCREEN
 ════════════════════════════════════ */
 function openWelcome() {
-  // Populate recent projects from localStorage
   const recent = document.getElementById('welcome-recent-list');
-  const keys = Object.keys(localStorage).filter(k=>k.startsWith('pm_'));
-  if (keys.length && recent) {
-    recent.innerHTML = keys.slice(0,5).map(k=>{
-      let pname='Proyecto', savedAt='';
-      try {
-        const d = JSON.parse(localStorage.getItem(k));
-        pname   = d.projectName || 'Sin título';
-        if (d.savedAt) savedAt = new Date(d.savedAt).toLocaleDateString('es');
-      } catch {}
-      return `<div class="recent-item" onclick="loadFromKey('${k}');closeWelcome();">
-        <div class="ri-icon">📄</div>
-        <div class="ri-info">
-          <div class="ri-name">${pname}</div>
-          <div class="ri-meta">${k}</div>
-        </div>
-        <div class="ri-date">${savedAt}</div>
-      </div>`;
-    }).join('');
+  if (recent) {
+    recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">⏳ Cargando proyectos del servidor…</div>';
   }
   document.getElementById('welcome-overlay').classList.add('open');
+
+  // Cargar proyectos del servidor
+  if (window._SRV && typeof window._SRV.listProjects === 'function') {
+    window._SRV.listProjects().then(projects => {
+      if (!recent) return;
+      if (!projects || !projects.length) {
+        recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">Sin proyectos en el servidor.</div>';
+        return;
+      }
+      recent.innerHTML = projects.slice(0, 8).map(p => {
+        const savedAt = p.savedAt ? new Date(p.savedAt).toLocaleDateString('es') : '';
+        return `<div class="recent-item" onclick="loadFromServer('${p.id}');closeWelcome();">
+          <div class="ri-icon">☁️</div>
+          <div class="ri-info">
+            <div class="ri-name">${p.projectName || 'Sin título'}</div>
+            <div class="ri-meta">${p.id}</div>
+          </div>
+          <div class="ri-date">${savedAt}</div>
+        </div>`;
+      }).join('');
+    }).catch(() => {
+      if (recent) recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">⚠️ No se pudo conectar al servidor.</div>';
+    });
+  } else {
+    if (recent) recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">Sin conexión al servidor aún.</div>';
+  }
+}
+
+function loadFromServer(id) {
+  if (!window._SRV) { toast('⚠️ Sin servidor'); return; }
+  window._SRV.loadProject(id).then(data => {
+    if (!data) { toast('❌ Proyecto no encontrado en servidor'); return; }
+    _applyProjectData(data);
+    toast('📂 Proyecto cargado desde el servidor');
+    addLog('info', `Proyecto "${data.projectName}" cargado del servidor.`);
+  }).catch(() => toast('❌ Error al cargar del servidor'));
+}
+
+// Función unificada de aplicar datos de proyecto
+function _applyProjectData(data) {
+  try {
+    if (data.projectName) document.getElementById('proj-name-badge').textContent = data.projectName;
+    STATE.layers      = data.layers      || STATE.layers;
+    STATE.activeLayer = data.activeLayer || STATE.activeLayer;
+    const wc = document.getElementById('world-canvas');
+    if (wc) {
+      wc.innerHTML = '';
+      if (data.worldW && data.worldH) {
+        wc.style.width  = data.worldW + 'px';
+        wc.style.height = data.worldH + 'px';
+        wc.style.outline        = '2px solid rgba(102,157,246,0.55)';
+        wc.style.boxShadow      = '0 0 0 1px rgba(26,115,232,0.2), 0 8px 40px rgba(0,0,0,0.55)';
+        wc.style.backgroundColor= '#18161C';
+        wc.style.borderRadius   = '2px';
+        setTimeout(() => { if(typeof _fitWorldToView==='function') _fitWorldToView(data.worldW, data.worldH); }, 80);
+      }
+    }
+    STATE.objects = [];
+    if (typeof _restoreAssets === 'function') _restoreAssets(data);
+    for (const o of (data.objects || [])) {
+      STATE.objects.push(o);
+      if (typeof renderWorldObj    === 'function') renderWorldObj(o);
+      if (typeof _applyObjImgUrl   === 'function') _applyObjImgUrl(o);
+    }
+    if (data.actors)    { STATE.actors = data.actors;        if(typeof renderActorLib  ==='function') renderActorLib(); }
+    if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
+    if (data.relations) { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
+    if (typeof renderSceneTree === 'function') renderSceneTree();
+    if (typeof renderLayers    === 'function') renderLayers();
+    if (typeof updateStatusBar === 'function') updateStatusBar();
+    if (typeof CommandHistory  !== 'undefined') CommandHistory.clear();
+  } catch(e) { console.error('_applyProjectData error:', e); }
 }
 
 
@@ -16236,42 +16266,15 @@ function closeWelcome(loadLast=false) {
 }
 
 function loadFromKey(key) {
+  // Redirigir al servidor si está disponible
+  if (window._SRV && typeof window._SRV.loadProject === 'function') {
+    loadFromServer(key);
+    return;
+  }
+  // Fallback local
   const raw = localStorage.getItem(key);
-  if (!raw) return;
-  try {
-    const data = JSON.parse(raw);
-    document.getElementById('proj-name-badge').textContent = data.projectName || 'Sin título';
-    STATE.layers      = data.layers      || STATE.layers;
-    STATE.activeLayer = data.activeLayer || STATE.activeLayer;
-
-    const wc = document.getElementById('world-canvas');
-    wc.innerHTML = '';
-    // Restaurar tamaño del mundo
-    if (data.worldW && data.worldH) {
-      wc.style.width  = data.worldW + 'px';
-      wc.style.height = data.worldH + 'px';
-      wc.style.outline        = '2px solid rgba(102,157,246,0.55)';
-      wc.style.boxShadow      = '0 0 0 1px rgba(26,115,232,0.2), 0 8px 40px rgba(0,0,0,0.55)';
-      wc.style.backgroundColor= '#18161C';
-      wc.style.borderRadius   = '2px';
-      setTimeout(() => _fitWorldToView(data.worldW, data.worldH), 80);
-    }
-
-    STATE.objects = [];
-    _restoreAssets(data);
-    for (const o of (data.objects||[])) {
-      STATE.objects.push(o);
-      renderWorldObj(o);
-      _applyObjImgUrl(o);
-    }
-    if (data.actors)    { STATE.actors = data.actors; renderActorLib(); }
-    if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
-    if (data.relations) { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
-    renderSceneTree(); renderLayers();
-    toast('📂 Proyecto cargado');
-    addLog('info', `Proyecto "${data.projectName}" cargado.`);
-    updateStatusBar();
-  } catch(err) { toast('❌ Error al cargar proyecto'); console.error(err); }
+  if (!raw) { toast('❌ Proyecto no encontrado'); return; }
+  try { _applyProjectData(JSON.parse(raw)); toast('📂 Proyecto cargado'); } catch { toast('❌ Error al cargar'); }
 }
 
 /* ════════════════════════════════════
@@ -21115,72 +21118,148 @@ window.openWelcome = function() {
 </div>
 
 <script>
-/* ═══════════════════════════════════════════
-   CO-DIRECTOR — Sistema Socket.io
-═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+   _SRV — Capa de servidor (Socket.io)
+   Expone: saveProject, loadProject, listProjects, clearProjects
+   Todo via el socket del Co-Director (mismo servidor)
+═══════════════════════════════════════════════════════════ */
+window._SRV = {
+  _socket: null,
+  _pending: {},   // { reqId: { resolve, reject, timer } }
+
+  _attach(socket) {
+    this._socket = socket;
+
+    socket.on('srv-response', ({ reqId, ok, data, error }) => {
+      const p = this._pending[reqId];
+      if (!p) return;
+      clearTimeout(p.timer);
+      delete this._pending[reqId];
+      if (ok) p.resolve(data);
+      else    p.reject(new Error(error || 'srv error'));
+    });
+  },
+
+  _emit(event, payload) {
+    return new Promise((resolve, reject) => {
+      if (!this._socket || !this._socket.connected) {
+        reject(new Error('Sin conexión al servidor'));
+        return;
+      }
+      const reqId = Math.random().toString(36).slice(2);
+      const timer = setTimeout(() => {
+        delete this._pending[reqId];
+        reject(new Error('Timeout'));
+      }, 12000);
+      this._pending[reqId] = { resolve, reject, timer };
+      this._socket.emit(event, { ...payload, reqId });
+    });
+  },
+
+  saveProject(data, silent) {
+    const userId = window._CD_userId || 'anon';
+    this._emit('srv-save', { userId, data }).then(res => {
+      if (!silent) {
+        toast('☁️ Guardado en servidor');
+        addLog('info', `☁️ Proyecto "${data.projectName}" guardado.`);
+      }
+    }).catch(err => {
+      toast('⚠️ Error al guardar: ' + err.message, 4000);
+    });
+  },
+
+  listProjects() {
+    const userId = window._CD_userId || 'anon';
+    return this._emit('srv-list', { userId });
+  },
+
+  loadProject(id) {
+    const userId = window._CD_userId || 'anon';
+    return this._emit('srv-load', { userId, id });
+  },
+
+  clearProjects() {
+    const userId = window._CD_userId || 'anon';
+    return this._emit('srv-clear', { userId });
+  },
+};
+
+/* ═══════════════════════════════════════════════════════════
+   CO-DIRECTOR — Colaboración en tiempo real
+═══════════════════════════════════════════════════════════ */
 const CD = {
-  socket:      null,
-  connected:   false,
-  mode:        'host',   // 'host' | 'join'
-  myName:      'Director',
-  sessionCode: null,
-  isHost:      false,
-  selectedProjKey: null,   // solo host
-  _cursors:    {},          // { socketId: domEl }
-  _broadcasting: false,
+  socket:         null,
+  connected:      false,
+  mode:           'host',
+  myName:         'Director',
+  sessionCode:    null,
+  isHost:         false,
+  selectedProjId: null,   // ID del proyecto en servidor
+  _cursors:       {},
+  _broadcasting:  false,
+  _peers:         {},     // { socketId: profileData }
+  _cmdPatchDone:  false,
 
   /* ── Abrir modal ── */
   open() {
-    // Pre-fill name from active profile
-    try {
-      const prof = this._getProfile();
-      if (prof && prof.name) {
-        const nameInput = document.getElementById('cd-my-name');
-        if (nameInput) nameInput.value = prof.name;
-      }
-    } catch {}
+    const prof = this._getProfile();
+    const inp  = document.getElementById('cd-my-name');
+    if (inp && prof.name) inp.value = prof.name;
     this._populateProjects();
     document.getElementById('cd-overlay').classList.add('open');
   },
-  close() {
-    document.getElementById('cd-overlay').classList.remove('open');
-  },
+  close() { document.getElementById('cd-overlay').classList.remove('open'); },
 
-  /* ── Cargar proyectos guardados (solo host) ── */
+  /* ── Cargar lista de proyectos del servidor ── */
   _populateProjects() {
     const list = document.getElementById('cd-proj-list');
-    const keys = Object.keys(localStorage).filter(k => k.startsWith('pm_'));
-    if (!keys.length) {
-      list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados aún</div>';
+    if (!list) return;
+    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⏳ Cargando proyectos…</div>';
+
+    if (!window._SRV._socket || !window._SRV._socket.connected) {
+      // Conectar solo para listar
+      const tmpSock = io();
+      tmpSock.once('connect', () => {
+        window._SRV._attach(tmpSock);
+        this._loadProjList(list);
+      });
+      tmpSock.once('connect_error', () => {
+        list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⚠️ Sin conexión al servidor</div>';
+      });
       return;
     }
-    list.innerHTML = keys.map(k => {
-      let name = 'Sin título', date = '';
-      try {
-        const d = JSON.parse(localStorage.getItem(k));
-        name = d.projectName || 'Sin título';
-        if (d.savedAt) date = new Date(d.savedAt).toLocaleDateString('es');
-      } catch {}
-      return `<div class="cd-proj-item" data-key="${k}" onclick="CD.selectProject('${k}')">
-        <div class="cd-proj-icon">🎮</div>
-        <div class="cd-proj-info">
-          <div class="cd-proj-name">${name}</div>
-          <div class="cd-proj-date">${date || k}</div>
-        </div>
-        <div class="cd-proj-check" id="cdpc-${k}" style="display:none;">✓</div>
-      </div>`;
-    }).join('');
+    this._loadProjList(list);
   },
 
-  selectProject(key) {
-    this.selectedProjKey = key;
-    document.querySelectorAll('.cd-proj-item').forEach(el => {
-      el.classList.toggle('selected', el.dataset.key === key);
+  _loadProjList(list) {
+    window._SRV.listProjects().then(projects => {
+      if (!projects || !projects.length) {
+        list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados en servidor</div>';
+        return;
+      }
+      list.innerHTML = projects.map(p => {
+        const date = p.savedAt ? new Date(p.savedAt).toLocaleDateString('es') : '';
+        return `<div class="cd-proj-item" data-id="${p.id}" onclick="CD.selectProject('${p.id}','${(p.projectName||'').replace(/'/g,"\\'")}')">
+          <div class="cd-proj-icon">☁️</div>
+          <div class="cd-proj-info">
+            <div class="cd-proj-name">${p.projectName || 'Sin título'}</div>
+            <div class="cd-proj-date">${date}</div>
+          </div>
+          <div class="cd-proj-check" id="cdpc-${p.id}" style="display:none;">✓</div>
+        </div>`;
+      }).join('');
+    }).catch(() => {
+      list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⚠️ Error cargando proyectos</div>';
     });
+  },
+
+  selectProject(id, name) {
+    this.selectedProjId = id;
+    document.querySelectorAll('.cd-proj-item').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
     document.querySelectorAll('.cd-proj-check').forEach(el => el.style.display = 'none');
-    const ck = document.getElementById(`cdpc-${key}`);
+    const ck = document.getElementById('cdpc-' + id);
     if (ck) ck.style.display = 'block';
-    this._setStatus('yellow', `Proyecto seleccionado ✓`);
+    this._setStatus('yellow', `"${name || id}" seleccionado ✓`);
   },
 
   selectMode(mode) {
@@ -21199,22 +21278,21 @@ const CD = {
     else this._joinSession();
   },
 
-  /* ── Crear sesión (host) ── */
   _createSession() {
-    if (!this.selectedProjKey) {
-      this._setStatus('yellow', 'Seleccioná un proyecto primero');
-      return;
-    }
+    if (!this.selectedProjId) { this._setStatus('yellow', 'Seleccioná un proyecto primero'); return; }
     this._setStatus('yellow', 'Conectando…');
     this._connect(() => {
       const code = this._genCode();
       this.sessionCode = code;
       this.isHost = true;
-      this.socket.emit('create-session', { code, name: this.myName, profile: this._getProfile() });
+      this.socket.emit('create-session', {
+        code,
+        name:    this.myName,
+        profile: this._getProfile(),
+      });
     });
   },
 
-  /* ── Unirse (guest) ── */
   _joinSession() {
     const code = (document.getElementById('cd-join-code').value || '').trim().toUpperCase();
     if (!code) { this._setStatus('yellow', 'Ingresá un código'); return; }
@@ -21222,97 +21300,78 @@ const CD = {
     this._connect(() => {
       this.sessionCode = code;
       this.isHost = false;
-      this.socket.emit('join-session', { code, name: this.myName, profile: this._getProfile() });
+      this.socket.emit('join-session', {
+        code,
+        name:    this.myName,
+        profile: this._getProfile(),
+      });
     });
-  },
-
-  /* ── Obtener perfil activo del usuario ── */
-  _getProfile() {
-    try {
-      const profiles = JSON.parse(localStorage.getItem('dg_profiles_list') || '[]');
-      const activeIdx = parseInt(localStorage.getItem('dg_active_profile') || '0');
-      if (profiles[activeIdx]) return profiles[activeIdx];
-      // Fallback: perfil legacy _dpProfile
-      const dp = JSON.parse(localStorage.getItem('dg_dp_profile') || '{}');
-      return dp;
-    } catch { return {}; }
   },
 
   /* ── Conectar socket ── */
   _connect(cb) {
     if (this.socket) { this.socket.disconnect(); this.socket = null; }
     this.socket = io();
+    window._SRV._attach(this.socket);
 
-    this.socket.on('connect', () => { this._log('🔌 Conectado al servidor'); cb(); });
+    this.socket.on('connect', () => {
+      this._log('🔌 Conectado al servidor');
+      cb();
+    });
     this.socket.on('connect_error', () => this._setStatus('red', 'Error de conexión'));
 
-    this.socket.on('session-created', ({ code, peers }) => {
-      this._onSessionReady(code, peers);
-      // Host envía el proyecto a todos cuando alguien se une
-    });
+    this.socket.on('session-created', ({ code, peers }) => this._onSessionReady(code, peers));
+    this.socket.on('session-joined',  ({ code, peers }) => this._onSessionReady(code, peers));
+    this.socket.on('error-msg', msg => { this._setStatus('red', msg); this._log('❌ ' + msg); });
 
-    this.socket.on('session-joined', ({ code, peers }) => {
-      this._onSessionReady(code, peers);
-    });
-
-    this.socket.on('error-msg', msg => {
-      this._setStatus('red', msg);
-      this._log('❌ ' + msg);
-    });
-
+    // peers-updated: el servidor manda [{id, name, role, profile?}]
+    // Si el servidor no soporta profile aún, los pedimos por canal propio
     this.socket.on('peers-updated', peers => {
+      this._mergePeers(peers);
       this._renderDirectors(peers);
       this._log(`👥 ${peers.length} director${peers.length !== 1 ? 'es' : ''} en sesión`);
-      // ── BUG FIX: cuando llega un nuevo guest, el host reenvía el proyecto ──
-      // Esto garantiza que el guest recibe el proyecto aunque se una después
+
+      // HOST: reenviar proyecto cuando llega un nuevo guest
       if (this.isHost && peers.length > 1) {
-        const key = this.selectedProjKey;
-        let data = null;
-        if (key?.startsWith('__fb__') && this._selectedProjData) {
-          data = this._selectedProjData;
-        } else if (key) {
-          try { data = JSON.parse(localStorage.getItem(key)); } catch {}
-        }
-        // Fallback: usar el proyecto actualmente cargado en STATE
-        if (!data && window.STATE) {
-          data = {
-            projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
-            objects:     STATE.objects   || [],
-            layers:      STATE.layers    || [],
-            activeLayer: STATE.activeLayer,
-            actors:      STATE.actors    || [],
-            rules:       typeof RULES !== 'undefined' ? RULES : [],
-            relations:   typeof RELATIONS !== 'undefined' ? RELATIONS : [],
-            assets:      typeof ASSETS !== 'undefined' ? ASSETS.map(a=>{const c={...a};delete c.audioEl;return c;}) : [],
-          };
-        }
-        if (data) {
-          this.socket.emit('project-load', data);
-          this._log(`📤 Re-enviando "${data.projectName || 'proyecto'}" al nuevo participante`);
-        }
+        this._sendProjectToRoom();
+      }
+
+      // Anunciar nuestro propio perfil a los nuevos
+      if (this.socket) {
+        this.socket.emit('peer-profile', {
+          sessionCode: this.sessionCode,
+          profile:     this._getProfile(),
+          name:        this.myName,
+        });
       }
     });
 
-    // Recibir proyecto del host (solo guests)
+    // Recibir perfiles de otros usuarios (canal propio, no depende del servidor)
+    this.socket.on('peer-profile', ({ fromId, profile, name }) => {
+      if (fromId && profile) {
+        this._peers[fromId] = { ...(this._peers[fromId] || {}), profile, name };
+        this._refreshCards();
+      }
+    });
+
+    // Recibir proyecto (solo guests)
     this.socket.on('project-load', data => {
       if (!this.isHost) {
-        loadFromKey.__cd_load(data);
+        _applyProjectData(data);
         this._log(`📂 Proyecto "${data.projectName}" recibido del host`);
         toast('📂 Proyecto cargado desde el host');
       }
     });
 
-    // Recibir cambios en tiempo real — aplica a TODOS (el servidor no devuelve al emisor)
+    // Recibir cambios en tiempo real
     this.socket.on('project-update', data => {
       this._broadcasting = true;
-      this._applyUpdate(data);
+      _applyProjectData(data);
       this._broadcasting = false;
     });
 
     // Cursores remotos
-    this.socket.on('cursor-move', ({ id, name, x, y }) => {
-      this._updateCursor(id, name, x, y);
-    });
+    this.socket.on('cursor-move', ({ id, name, x, y }) => this._updateCursor(id, name, x, y));
 
     this.socket.on('disconnect', () => {
       this._log('🔌 Desconectado del servidor');
@@ -21322,91 +21381,244 @@ const CD = {
 
   /* ── Sesión lista ── */
   _onSessionReady(code, peers) {
-    this.connected = true;
+    this.connected   = true;
     this.sessionCode = code;
 
-    // Cambiar a pane conectado
     document.getElementById('cd-pane-setup').style.display = 'none';
     document.getElementById('cd-pane-connected').style.display = 'flex';
     document.getElementById('cd-pane-connected').style.flexDirection = 'column';
 
-    // Mostrar código solo al host
-    const codeDisplay = document.getElementById('cd-code-display');
     if (this.isHost) {
-      codeDisplay.style.display = 'flex';
+      document.getElementById('cd-code-display').style.display = 'flex';
       document.getElementById('cd-code-val').textContent = code;
     }
 
+    this._mergePeers(peers);
     this._renderDirectors(peers);
     this._setStatus2('green', 'Sesión activa');
     this._log(`✅ Sesión ${this.isHost ? 'creada' : 'unida'}: ${code}`);
     this._updateTopBtn(true);
 
-    // Host: enviar proyecto a la sala
-    if (this.isHost && this.selectedProjKey) {
-      const raw = localStorage.getItem(this.selectedProjKey);
-      if (raw) {
-        try {
-          const data = JSON.parse(raw);
-          this.socket.emit('project-load', data);
-          this._log(`📤 Proyecto "${data.projectName}" enviado`);
-        } catch {}
-      }
+    // HOST: cargar proyecto del servidor y enviarlo a la sala
+    if (this.isHost && this.selectedProjId) {
+      window._SRV.loadProject(this.selectedProjId).then(data => {
+        if (!data) return;
+        _applyProjectData(data);
+        this.socket.emit('project-load', data);
+        this._log(`📤 Proyecto "${data.projectName}" enviado a la sala`);
+      });
     }
 
-    // Patch saveProject para sincronizar
-    this._patchSave();
+    // Anunciar nuestro perfil
+    setTimeout(() => {
+      if (this.socket) {
+        this.socket.emit('peer-profile', {
+          sessionCode: code,
+          profile:     this._getProfile(),
+          name:        this.myName,
+        });
+      }
+    }, 300);
+
+    // Hookear CommandHistory para sync automático
+    this._patchCommandHistory();
   },
 
-  /* ── Parchar saveProject para broadcast bidireccional ── */
-  _patchSave() {
-    const orig = window.saveProject || (() => {});
-    window.saveProject = () => {
-      orig();
+  /* ── Enviar proyecto actual a la sala ── */
+  _sendProjectToRoom() {
+    if (!this.socket || !this.isHost) return;
+    const data = _buildSaveData();
+    this.socket.emit('project-load', data);
+    this._log(`📤 Re-enviando "${data.projectName}" a la sala`);
+  },
+
+  /* ── Hookear CommandHistory para sync en tiempo real ── */
+  _patchCommandHistory() {
+    if (this._cmdPatchDone) return;
+    this._cmdPatchDone = true;
+
+    const orig = CommandHistory.execute.bind(CommandHistory);
+    CommandHistory.execute = (cmd) => {
+      orig(cmd);
       if (!this.connected || this._broadcasting) return;
-      // Serializar el estado actual
-      let raw = null;
-      try { raw = localStorage.getItem('pm_project'); } catch {}
-      let data = null;
-      if (raw) {
-        try { data = JSON.parse(raw); } catch {}
-      }
-      // Fallback: construir desde STATE
-      if (!data && window.STATE) {
-        data = {
-          projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
-          objects:     STATE.objects   || [],
-          layers:      STATE.layers    || [],
-          activeLayer: STATE.activeLayer,
-          actors:      STATE.actors    || [],
-          rules:       typeof RULES !== 'undefined' ? RULES : [],
-          relations:   typeof RELATIONS !== 'undefined' ? RELATIONS : [],
-          assets:      typeof ASSETS !== 'undefined' ? ASSETS.map(a=>{const c={...a};delete c.audioEl;return c;}) : [],
-        };
-      }
-      if (data) {
-        // Todos emiten project-update — el servidor lo reenvía a los demás
+      // Debounce: esperar 200ms antes de emitir (agrupa cambios rápidos)
+      clearTimeout(this._syncTimer);
+      this._syncTimer = setTimeout(() => {
+        if (!this.connected || !this.socket) return;
+        const data = _buildSaveData();
         this.socket.emit('project-update', data);
-      }
+      }, 200);
+    };
+
+    // También hookear undo/redo
+    const origUndo = CommandHistory.undo.bind(CommandHistory);
+    CommandHistory.undo = () => {
+      origUndo();
+      if (!this.connected || this._broadcasting) return;
+      clearTimeout(this._syncTimer);
+      this._syncTimer = setTimeout(() => {
+        if (!this.connected || !this.socket) return;
+        this.socket.emit('project-update', _buildSaveData());
+      }, 200);
+    };
+
+    const origRedo = CommandHistory.redo.bind(CommandHistory);
+    CommandHistory.redo = () => {
+      origRedo();
+      if (!this.connected || this._broadcasting) return;
+      clearTimeout(this._syncTimer);
+      this._syncTimer = setTimeout(() => {
+        if (!this.connected || !this.socket) return;
+        this.socket.emit('project-update', _buildSaveData());
+      }, 200);
     };
   },
 
-  /* ── Aplicar update recibido ── */
-  _applyUpdate(data) {
-    try {
-      // Actualizar objetos en el canvas sin recargar todo
-      if (data.objects) {
-        STATE.objects = data.objects;
-        const wc = document.getElementById('world-canvas');
-        if (wc) { wc.innerHTML = ''; data.objects.forEach(o => { renderWorldObj(o); _applyObjImgUrl(o); }); }
+  /* ── Merge peers con perfiles conocidos ── */
+  _mergePeers(peers) {
+    peers.forEach(p => {
+      if (!this._peers[p.id]) this._peers[p.id] = {};
+      if (p.profile) this._peers[p.id].profile = p.profile;
+      this._peers[p.id].name = p.name;
+      this._peers[p.id].role = p.role;
+    });
+  },
+
+  /* ── Refrescar cards sin re-renderizar todo ── */
+  _refreshCards() {
+    const grid = document.getElementById('cd-directors-grid');
+    if (!grid) return;
+    // Re-render con los datos actualizados
+    const peers = Object.entries(this._peers).map(([id, p]) => ({ id, ...p }));
+    if (peers.length) this._renderDirectors(peers);
+  },
+
+  /* ── Render tarjetas con perfil real y animación 3D ── */
+  _renderDirectors(peers) {
+    const grid = document.getElementById('cd-directors-grid');
+    if (!grid) return;
+    const myId = this.socket?.id;
+
+    // Inyectar estilos 3D si no existen
+    if (!document.getElementById('cd-3d-style')) {
+      const s = document.createElement('style');
+      s.id = 'cd-3d-style';
+      s.textContent = `
+        .cds-scene{width:128px;height:188px;perspective:700px;cursor:pointer;flex-shrink:0;user-select:none}
+        .cds-card{width:100%;height:100%;position:relative;transform-style:preserve-3d;
+          transition:transform .5s cubic-bezier(.34,1.2,.64,1);border-radius:18px}
+        .cds-scene:hover .cds-card{transform:rotateY(14deg) rotateX(-7deg) scale(1.05)}
+        .cds-card.spin{animation:cds-spin3d 1s cubic-bezier(.34,1.56,.64,1) forwards}
+        @keyframes cds-spin3d{
+          0%{transform:rotateY(0) scale(1)}
+          40%{transform:rotateY(180deg) scale(1.08)}
+          75%{transform:rotateY(340deg) scale(1.04)}
+          100%{transform:rotateY(360deg) scale(1)}}
+        .cds-front{position:absolute;inset:0;backface-visibility:hidden;border-radius:18px;
+          display:flex;flex-direction:column;align-items:center;padding:16px 10px 12px;gap:8px;
+          overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.06)}
+        .cds-front::after{content:'';position:absolute;inset:0;border-radius:18px;pointer-events:none;
+          background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px)}
+        .cds-shine{position:absolute;inset:0;border-radius:18px;pointer-events:none;opacity:0;transition:opacity .3s;
+          background:linear-gradient(125deg,transparent 30%,rgba(255,255,255,.07) 45%,rgba(255,255,255,.13) 50%,rgba(255,255,255,.07) 55%,transparent 70%)}
+        .cds-scene:hover .cds-shine{opacity:1}
+        .cds-ring{width:70px;height:70px;border-radius:50%;padding:3px;position:relative;z-index:1;
+          animation:cd-spin 7s linear infinite;flex-shrink:0}
+        .cds-inner{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;
+          overflow:hidden;font-size:30px;border:3px solid transparent}
+        .cds-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+        .cds-inner canvas{width:100%;height:100%;border-radius:50%;image-rendering:pixelated}
+        .cds-name{font-family:'Google Sans Display',sans-serif;font-size:11px;font-weight:700;color:#e9d5ff;
+          text-align:center;position:relative;z-index:1;max-width:112px;
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 0 12px rgba(102,157,246,.4)}
+        .cds-role{font-size:7.5px;color:rgba(102,157,246,.75);font-family:'Roboto Mono',monospace;
+          letter-spacing:.8px;text-transform:uppercase;position:relative;z-index:1}
+        .cds-badge{font-size:6.5px;font-weight:700;letter-spacing:.8px;padding:2px 7px;
+          border-radius:4px;position:relative;z-index:1}
+        .cds-badge.host{background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.4);color:#c084fc}
+        .cds-badge.guest{background:rgba(52,168,83,.15);border:1px solid rgba(52,168,83,.35);color:#4ade80}
+        .cds-you{font-size:7px;color:rgba(255,255,255,.4);background:rgba(255,255,255,.08);
+          border-radius:5px;padding:2px 6px;position:relative;z-index:1}
+      `;
+      document.head.appendChild(s);
+    }
+
+    const THEMES = {
+      1:  {bg:'linear-gradient(145deg,#1a1825,#2a2640,#1e1c2e)',ring:'#1a73e8,#a855f7,#34a853,#fbbc04,#1a73e8',inner:'#1a1825',border:'rgba(102,157,246,.3)'},
+      2:  {bg:'linear-gradient(145deg,#0d1a0d,#0f2e1a,#0a1a10)',ring:'#10b981,#34d364,#059669,#6ee7b7,#10b981',inner:'#0a1a10',border:'rgba(52,211,100,.3)'},
+      3:  {bg:'linear-gradient(145deg,#1a0d0d,#2e1010,#1a0a0a)',ring:'#ea4335,#ff6b5b,#c62828,#ff8a65,#ea4335',inner:'#1a0a0a',border:'rgba(234,67,53,.3)'},
+      4:  {bg:'linear-gradient(145deg,#1a160a,#2e2508,#1a1500)',ring:'#fbbc04,#ffd600,#f57f17,#ffe57f,#fbbc04',inner:'#1a1500',border:'rgba(251,188,4,.3)'},
+      5:  {bg:'linear-gradient(145deg,#0e0e14,#17152a,#0c0b15)',ring:'#7c3aed,#a78bfa,#4c1d95,#c4b5fd,#7c3aed',inner:'#0c0b15',border:'rgba(139,92,246,.3)'},
+      6:  {bg:'linear-gradient(145deg,#0d1620,#102030,#0a1520)',ring:'#0ea5e9,#7dd3fc,#0369a1,#bae6fd,#0ea5e9',inner:'#0a1520',border:'rgba(125,211,252,.3)'},
+      7:  {bg:'linear-gradient(145deg,#111608,#1a2408,#0e1505)',ring:'#65a30d,#a3e635,#3f6212,#d9f99d,#65a30d',inner:'#0e1505',border:'rgba(163,230,53,.3)'},
+      8:  {bg:'linear-gradient(145deg,#1a0f08,#2d1a0a,#1a0e05)',ring:'#ea580c,#fb923c,#9a3412,#fed7aa,#ea580c',inner:'#1a0e05',border:'rgba(251,146,60,.3)'},
+      9:  {bg:'linear-gradient(145deg,#1a0d16,#2d1025,#180b18)',ring:'#be185d,#ec4899,#831843,#f9a8d4,#be185d',inner:'#180b18',border:'rgba(236,72,153,.3)'},
+      10: {bg:'linear-gradient(145deg,#0a1718,#0e2528,#081418)',ring:'#0d9488,#2dd4bf,#134e4a,#99f6e4,#0d9488',inner:'#081418',border:'rgba(45,212,191,.3)'},
+      11: {bg:'linear-gradient(145deg,#0e0e20,#141430,#0a0a1e)',ring:'#4338ca,#6366f1,#1e1b4b,#a5b4fc,#4338ca',inner:'#0a0a1e',border:'rgba(99,102,241,.3)'},
+      12: {bg:'linear-gradient(145deg,#12101e,#1e1530,#120e20)',ring:'#f43f5e,#f97316,#eab308,#22c55e,#3b82f6,#a855f7,#f43f5e',inner:'#12101e',border:'rgba(255,255,255,.18)'},
+    };
+
+    grid.innerHTML = peers.map(p => {
+      const isMe   = p.id === myId;
+      // Mezclar datos del servidor con perfiles conocidos localmente
+      const cached = this._peers[p.id] || {};
+      const prof   = p.profile || cached.profile || {};
+      const tn     = prof.cardTheme || 1;
+      const t      = THEMES[tn] || THEMES[1];
+      const cid    = 'cdc_' + (p.id || Math.random().toString(36).slice(2,8));
+
+      // Construir avatar HTML
+      let avHtml = '';
+      if (prof.avatarType === 'photo' && prof.photoDataUrl) {
+        avHtml = `<img src="${prof.photoDataUrl}" alt="${p.name}">`;
+      } else if (prof.avatarType === 'pixel' && prof.avatarId) {
+        avHtml = `<canvas id="${cid}_av" width="64" height="64"></canvas>`;
+      } else {
+        const EMOJIS = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
+        avHtml = `<span style="font-size:28px;">${prof.avatarEmoji || EMOJIS[(p.name||'').charCodeAt(0) % EMOJIS.length]}</span>`;
       }
-      if (data.layers)     { STATE.layers = data.layers; renderLayers(); }
-      if (data.actors)     { STATE.actors = data.actors; renderActorLib(); }
-      if (data.rules)      { RULES.length=0; data.rules.forEach(r=>RULES.push(r)); }
-      if (data.relations)  { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
-      renderSceneTree();
-      updateStatusBar();
-    } catch(e) { console.warn('CD update error:', e); }
+
+      return `
+        <div class="cds-scene" onclick="CD._spin('${cid}')">
+          <div class="cds-card" id="${cid}">
+            <div class="cds-front" style="background:${t.bg};border:1px solid ${t.border};">
+              <div class="cds-shine"></div>
+              <div class="cds-ring" style="background:conic-gradient(${t.ring});">
+                <div class="cds-inner" style="background:${t.inner};border-color:${t.inner};">${avHtml}</div>
+              </div>
+              <div class="cds-name">${p.name || 'Director'}</div>
+              <div class="cds-role">${p.role || 'Director'}</div>
+              <div class="cds-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
+              ${isMe ? '<div class="cds-you">● Tú</div>' : ''}
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    // Dibujar pixel avatars
+    requestAnimationFrame(() => {
+      peers.forEach(p => {
+        const cached = this._peers[p.id] || {};
+        const prof   = p.profile || cached.profile || {};
+        if (prof.avatarType === 'pixel' && prof.avatarId && typeof DP_PIXEL_AVATARS !== 'undefined') {
+          const cid = 'cdc_' + (p.id || '');
+          const c   = document.getElementById(cid + '_av');
+          if (c) {
+            const av = DP_PIXEL_AVATARS.find(a => a.id === prof.avatarId) || DP_PIXEL_AVATARS[0];
+            if (av && typeof dpDrawPixelAvatar === 'function') dpDrawPixelAvatar(c, av, 64);
+          }
+        }
+      });
+    });
+  },
+
+  _spin(cid) {
+    const c = document.getElementById(cid);
+    if (!c) return;
+    c.classList.remove('spin');
+    void c.offsetWidth;
+    c.classList.add('spin');
+    c.addEventListener('animationend', () => c.classList.remove('spin'), { once: true });
   },
 
   /* ── Desconectar ── */
@@ -21417,13 +21629,14 @@ const CD = {
   },
 
   _onDisconnect() {
-    this.connected = false;
-    this.isHost = false;
-    this.sessionCode = null;
+    this.connected      = false;
+    this.isHost         = false;
+    this.sessionCode    = null;
+    this._peers         = {};
+    this._cmdPatchDone  = false;
     this._clearCursors();
     this._updateTopBtn(false);
-    // Resetear overlay a setup
-    document.getElementById('cd-pane-setup').style.display = 'block';
+    document.getElementById('cd-pane-setup').style.display    = 'block';
     document.getElementById('cd-pane-connected').style.display = 'none';
     this._setStatus('', 'Desconectado');
     toast('👥 Co-Director desconectado');
@@ -21446,466 +21659,84 @@ const CD = {
     this._cursors = {};
   },
 
-  /* ── Render cards directores con perfil real y animación 3D ── */
-  _renderDirectors(peers) {
-    const grid = document.getElementById('cd-directors-grid');
-    if (!grid) return;
-    const myId = this.socket?.id;
-
-    // Inyectar CSS de animación 3D si no existe
-    if (!document.getElementById('cd-3d-card-style')) {
-      const s = document.createElement('style');
-      s.id = 'cd-3d-card-style';
-      s.textContent = `
-        .cd-dir-card-scene {
-          width:130px; height:190px;
-          perspective:600px;
-          cursor:pointer;
-          flex-shrink:0;
-        }
-        .cd-dir-card-3d {
-          width:100%; height:100%;
-          position:relative;
-          transform-style:preserve-3d;
-          transition:transform .55s cubic-bezier(.34,1.2,.64,1);
-          border-radius:18px;
-        }
-        .cd-dir-card-scene:hover .cd-dir-card-3d {
-          transform: rotateY(12deg) rotateX(-6deg) scale(1.04);
-        }
-        .cd-dir-card-3d.spinning {
-          animation: cd-card-spin3d 1.1s cubic-bezier(.34,1.56,.64,1) forwards;
-        }
-        @keyframes cd-card-spin3d {
-          0%   { transform: rotateY(0deg) scale(1); }
-          40%  { transform: rotateY(180deg) scale(1.07); }
-          70%  { transform: rotateY(340deg) scale(1.04); }
-          100% { transform: rotateY(360deg) scale(1); }
-        }
-        .cd-dir-card-front {
-          position:absolute; inset:0;
-          backface-visibility:hidden;
-          border-radius:18px;
-          display:flex; flex-direction:column; align-items:center;
-          padding:16px 10px 14px;
-          gap:8px; overflow:hidden;
-          box-shadow:0 12px 40px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06);
-        }
-        .cd-dir-card-front::after {
-          content:'';
-          position:absolute; inset:0;
-          background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px);
-          border-radius:18px; pointer-events:none;
-        }
-        .cd-dir-card-shine {
-          position:absolute; inset:0; border-radius:18px; pointer-events:none;
-          background:linear-gradient(125deg,transparent 30%,rgba(255,255,255,.07) 45%,rgba(255,255,255,.12) 50%,rgba(255,255,255,.07) 55%,transparent 70%);
-          opacity:0; transition:opacity .3s;
-        }
-        .cd-dir-card-scene:hover .cd-dir-card-shine { opacity:1; }
-        .cdc-ring-3d {
-          width:68px; height:68px; border-radius:50%; padding:3px;
-          position:relative; z-index:1; flex-shrink:0;
-          animation:cd-spin 7s linear infinite;
-        }
-        .cdc-inner-3d {
-          width:100%; height:100%; border-radius:50%;
-          display:flex; align-items:center; justify-content:center;
-          overflow:hidden; font-size:30px;
-          border:3px solid transparent;
-        }
-        .cdc-inner-3d img {
-          width:100%; height:100%; object-fit:cover; border-radius:50%;
-        }
-        .cdc-inner-3d canvas {
-          width:100%; height:100%; border-radius:50%;
-          image-rendering:pixelated;
-        }
-        .cd-you-pill {
-          font-size:7px; color:rgba(255,255,255,.45);
-          background:rgba(255,255,255,.08); border-radius:6px;
-          padding:2px 7px; letter-spacing:.5px;
-          position:relative; z-index:1;
-        }
-      `;
-      document.head.appendChild(s);
-    }
-
-    grid.innerHTML = peers.map(p => {
-      const isMe = p.id === myId;
-      // Obtener perfil guardado — puede venir adjunto al peer o sacarlo del localStorage local
-      const prof = p.profile || {};
-      const themeNum = prof.cardTheme || 1;
-      const themes = {
-        1:  { bg:'linear-gradient(145deg,#1a1825,#2a2640,#1e1c2e)', ring:'#1a73e8,#a855f7,#34a853,#fbbc04,#1a73e8', inner:'#1a1825', border:'rgba(102,157,246,.3)' },
-        2:  { bg:'linear-gradient(145deg,#0d1a0d,#0f2e1a,#0a1a10)', ring:'#10b981,#34d364,#059669,#6ee7b7,#10b981', inner:'#0a1a10', border:'rgba(52,211,100,.3)' },
-        3:  { bg:'linear-gradient(145deg,#1a0d0d,#2e1010,#1a0a0a)', ring:'#ea4335,#ff6b5b,#c62828,#ff8a65,#ea4335', inner:'#1a0a0a', border:'rgba(234,67,53,.3)' },
-        4:  { bg:'linear-gradient(145deg,#1a160a,#2e2508,#1a1500)', ring:'#fbbc04,#ffd600,#f57f17,#ffe57f,#fbbc04', inner:'#1a1500', border:'rgba(251,188,4,.3)' },
-        5:  { bg:'linear-gradient(145deg,#0e0e14,#17152a,#0c0b15)', ring:'#7c3aed,#a78bfa,#4c1d95,#c4b5fd,#7c3aed', inner:'#0c0b15', border:'rgba(139,92,246,.3)' },
-        6:  { bg:'linear-gradient(145deg,#0d1620,#102030,#0a1520)', ring:'#0ea5e9,#7dd3fc,#0369a1,#bae6fd,#0ea5e9', inner:'#0a1520', border:'rgba(125,211,252,.3)' },
-        7:  { bg:'linear-gradient(145deg,#111608,#1a2408,#0e1505)', ring:'#65a30d,#a3e635,#3f6212,#d9f99d,#65a30d', inner:'#0e1505', border:'rgba(163,230,53,.3)' },
-        8:  { bg:'linear-gradient(145deg,#1a0f08,#2d1a0a,#1a0e05)', ring:'#ea580c,#fb923c,#9a3412,#fed7aa,#ea580c', inner:'#1a0e05', border:'rgba(251,146,60,.3)' },
-        9:  { bg:'linear-gradient(145deg,#1a0d16,#2d1025,#180b18)', ring:'#be185d,#ec4899,#831843,#f9a8d4,#be185d', inner:'#180b18', border:'rgba(236,72,153,.3)' },
-        10: { bg:'linear-gradient(145deg,#0a1718,#0e2528,#081418)', ring:'#0d9488,#2dd4bf,#134e4a,#99f6e4,#0d9488', inner:'#081418', border:'rgba(45,212,191,.3)' },
-        11: { bg:'linear-gradient(145deg,#0e0e20,#141430,#0a0a1e)', ring:'#4338ca,#6366f1,#1e1b4b,#a5b4fc,#4338ca', inner:'#0a0a1e', border:'rgba(99,102,241,.3)' },
-        12: { bg:'linear-gradient(145deg,#12101e,#1e1530,#120e20)', ring:'#f43f5e,#f97316,#eab308,#22c55e,#3b82f6,#a855f7,#f43f5e', inner:'#12101e', border:'rgba(255,255,255,.18)' },
+  /* ── Obtener perfil activo (SOLO lectura, no modifica nada del host) ── */
+  _getProfile() {
+    try {
+      const list = JSON.parse(localStorage.getItem('dg_profiles_list') || '[]');
+      const idx  = parseInt(localStorage.getItem('dg_active_profile')  || '0');
+      // Devuelve solo datos de UI — sin datos de proyecto
+      const p = list[idx] || {};
+      return {
+        name:         p.name         || 'Director',
+        title:        p.title        || '',
+        avatarType:   p.avatarType   || 'emoji',
+        avatarEmoji:  p.avatarEmoji  || '🎮',
+        avatarId:     p.avatarId     || null,
+        photoDataUrl: p.photoDataUrl || null,
+        cardTheme:    p.cardTheme    || 1,
       };
-      const t = themes[themeNum] || themes[1];
-      const cardId = 'cdcard_' + (p.id || Math.random().toString(36).slice(2));
-
-      // Avatar HTML según tipo
-      let avatarHTML = '';
-      if (prof.avatarType === 'photo' && prof.photoDataUrl) {
-        avatarHTML = `<img src="${prof.photoDataUrl}" alt="${p.name}">`;
-      } else if (prof.avatarType === 'pixel' && prof.avatarId) {
-        avatarHTML = `<canvas id="${cardId}_pxav" width="64" height="64" style="image-rendering:pixelated;width:100%;height:100%;border-radius:50%;"></canvas>`;
-      } else {
-        const emojis = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
-        const emoji = prof.avatarEmoji || emojis[(p.name||'').charCodeAt(0) % emojis.length];
-        avatarHTML = `<span style="font-size:28px;">${emoji}</span>`;
-      }
-
-      return `
-        <div class="cd-dir-card-scene" onclick="CD._spinCard('${cardId}')">
-          <div class="cd-dir-card-3d" id="${cardId}">
-            <div class="cd-dir-card-front" style="background:${t.bg};border:1px solid ${t.border};">
-              <div class="cd-dir-card-shine"></div>
-              <div class="cdc-ring-3d" style="background:conic-gradient(${t.ring});">
-                <div class="cdc-inner-3d" style="background:${t.inner};border-color:${t.inner};">
-                  ${avatarHTML}
-                </div>
-              </div>
-              <div class="cdc-name">${p.name || 'Director'}</div>
-              <div class="cdc-role">${p.role || 'Director'}</div>
-              <div class="cdc-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
-              ${isMe ? '<div class="cd-you-pill">● Tú</div>' : ''}
-            </div>
-          </div>
-        </div>`;
-    }).join('');
-
-    // Dibujar pixel avatars después del render
-    requestAnimationFrame(() => {
-      peers.forEach(p => {
-        const prof = p.profile || {};
-        if (prof.avatarType === 'pixel' && prof.avatarId && typeof DP_PIXEL_AVATARS !== 'undefined') {
-          const cardId = 'cdcard_' + (p.id || '');
-          const c = document.getElementById(cardId + '_pxav');
-          if (c) {
-            const av = DP_PIXEL_AVATARS.find(a => a.id === prof.avatarId) || DP_PIXEL_AVATARS[0];
-            if (av && typeof dpDrawPixelAvatar === 'function') dpDrawPixelAvatar(c, av, 64);
-          }
-        }
-      });
-    });
-  },
-
-  /* ── Spin 3D card on click ── */
-  _spinCard(cardId) {
-    const card = document.getElementById(cardId);
-    if (!card) return;
-    card.classList.remove('spinning');
-    void card.offsetWidth; // reflow
-    card.classList.add('spinning');
-    card.addEventListener('animationend', () => card.classList.remove('spinning'), { once: true });
-  },
-
-  _avatar(name) {
-    const emojis = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
-    return emojis[(name||'').charCodeAt(0) % emojis.length];
+    } catch { return { name: 'Director', cardTheme: 1 }; }
   },
 
   /* ── Helpers UI ── */
   _setStatus(type, msg) {
     const dot  = document.getElementById('cd-status-dot');
     const text = document.getElementById('cd-status-text');
-    if (dot)  { dot.className = 'cd-status-dot' + (type ? ' ' + type : ''); }
+    if (dot)  dot.className = 'cd-status-dot' + (type ? ' ' + type : '');
     if (text) text.textContent = msg;
   },
   _setStatus2(type, msg) {
     const dot  = document.getElementById('cd-status-dot2');
     const text = document.getElementById('cd-status-text2');
-    if (dot)  { dot.className = 'cd-status-dot' + (type ? ' ' + type : ''); }
+    if (dot)  dot.className = 'cd-status-dot' + (type ? ' ' + type : '');
     if (text) text.textContent = msg;
   },
   _log(msg) {
     const log = document.getElementById('cd-log');
     if (!log) return;
     const line = document.createElement('div');
-    line.textContent = new Date().toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) + ' · ' + msg;
+    line.textContent = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + ' · ' + msg;
     log.prepend(line);
   },
   _updateTopBtn(live) {
     const btn = document.getElementById('cd-topbar-btn');
     if (!btn) return;
     btn.className = 'cd-topbar-btn' + (live ? ' live' : '');
-    btn.querySelector('.cd-pulse').style.background = live ? '#4ade80' : '#a855f7';
+    const pulse = btn.querySelector('.cd-pulse');
+    if (pulse) pulse.style.background = live ? '#4ade80' : '#a855f7';
   },
   copyCode() {
-    navigator.clipboard.writeText(this.sessionCode || '').catch(()=>{});
+    navigator.clipboard.writeText(this.sessionCode || '').catch(() => {});
     toast('📋 Código copiado: ' + this.sessionCode);
   },
   _genCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    return Array.from({length:6}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
+    const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    return Array.from({length:6}, () => c[Math.floor(Math.random()*c.length)]).join('');
   },
 };
 
-/* ── Patch loadFromKey para que el host pueda cargar datos recibidos ── */
-loadFromKey.__cd_load = function(data) {
-  try {
-    document.getElementById('proj-name-badge').textContent = data.projectName || 'Sin título';
-    STATE.layers      = data.layers      || STATE.layers;
-    STATE.activeLayer = data.activeLayer || STATE.activeLayer;
-    const wc = document.getElementById('world-canvas');
-    if (wc) {
-      wc.innerHTML = '';
-      if (data.worldW && data.worldH) {
-        wc.style.width  = data.worldW + 'px';
-        wc.style.height = data.worldH + 'px';
-        setTimeout(() => { if(typeof _fitWorldToView==='function') _fitWorldToView(data.worldW, data.worldH); }, 80);
-      }
-    }
-    STATE.objects = [];
-    if (typeof _restoreAssets === 'function') _restoreAssets(data);
-    for (const o of (data.objects||[])) {
-      STATE.objects.push(o);
-      if(typeof renderWorldObj==='function') renderWorldObj(o);
-      if(typeof _applyObjImgUrl==='function') _applyObjImgUrl(o);
-    }
-    if (data.actors)    { STATE.actors = data.actors; if(typeof renderActorLib==='function') renderActorLib(); }
-    if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
-    if (data.relations) { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
-    if(typeof renderSceneTree==='function') renderSceneTree();
-    if(typeof renderLayers==='function')    renderLayers();
-    if(typeof updateStatusBar==='function') updateStatusBar();
-  } catch(e) { console.error('CD load error:', e); }
-};
-
-/* ── Enviar cursor al mover el mouse ── */
+/* ── Enviar cursor ── */
 document.addEventListener('mousemove', e => {
   if (!CD.connected || !CD.socket) return;
   CD.socket.emit('cursor-move', { name: CD.myName, x: e.clientX, y: e.clientY });
 });
 
+/* ── cd_load para recibir proyecto del host ── */
+loadFromKey.__cd_load = _applyProjectData;
+
 /* ── Init ── */
 document.addEventListener('DOMContentLoaded', () => {
-  addLog('info', '🎬 Co-Director listo · Hacé clic en el botón "Co-Director" para colaborar.');
+  addLog('info', '🎬 Co-Director listo · Hacé clic en "Co-Director" para colaborar en tiempo real.');
 });
 </script>
 
-<!-- ═══════════════════════════════════════════════════════
-     FIREBASE — Guardado en la nube + Co-Director cloud
-═══════════════════════════════════════════════════════ -->
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, collection, getDocs, deleteDoc, serverTimestamp }
-  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey:            "AIzaSyAmGX9jK4EjJh5DBlYueZezuvxy2zTmMXU",
-  authDomain:        "director-gamer.firebaseapp.com",
-  projectId:         "director-gamer",
-  storageBucket:     "director-gamer.firebasestorage.app",
-  messagingSenderId: "762351067208",
-  appId:             "1:762351067208:web:585526fd14c6d63303b87d",
-  measurementId:     "G-LQDZ6GJMKY"
-};
-
-const fbApp = initializeApp(firebaseConfig);
-const db    = getFirestore(fbApp);
-
-/* ── Exponer al scope global para que el Co-Director lo use ── */
-window._FB = {
-  /* Guardar proyecto en Firestore */
-  async saveProject(data) {
-    try {
-      const id = (data.projectName || 'sin-titulo')
-        .toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'').slice(0,40)
-        + '-' + Date.now();
-      await setDoc(doc(db, 'projects', id), {
-        ...data,
-        _id: id,
-        savedAt: serverTimestamp(),
-        // No guardar imágenes base64 grandes en Firestore — solo metadatos y estructura
-        assets: (data.assets||[]).map(a => {
-          const c = {...a};
-          // Recortar base64 muy grandes
-          if (c.url && c.url.startsWith('data:') && c.url.length > 50000) {
-            c.url = c.url.slice(0, 50000) + '…[truncado]';
-          }
-          return c;
-        }),
-      });
-      console.log('☁️ Guardado en Firestore:', id);
-      return id;
-    } catch(e) {
-      console.warn('Firebase save error:', e);
-      return null;
-    }
-  },
-
-  /* Cargar lista de proyectos */
-  async listProjects() {
-    try {
-      const snap = await getDocs(collection(db, 'projects'));
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    } catch(e) {
-      console.warn('Firebase list error:', e);
-      return [];
-    }
-  },
-
-  /* Cargar un proyecto por ID */
-  async loadProject(id) {
-    try {
-      const snap = await getDoc(doc(db, 'projects', id));
-      return snap.exists() ? snap.data() : null;
-    } catch(e) {
-      console.warn('Firebase load error:', e);
-      return null;
-    }
-  },
-
-  /* Eliminar proyecto */
-  async deleteProject(id) {
-    try {
-      await deleteDoc(doc(db, 'projects', id));
-    } catch(e) {
-      console.warn('Firebase delete error:', e);
-    }
-  }
-};
-
-/* ── Parchear _doSave para también guardar en Firebase ── */
-const _origDoSave = window._doSave || null;
-const _fbSavePatch = () => {
-  if (typeof _doSave !== 'function') return;
-  const orig = _doSave;
-  window._doSave = function(silent = false) {
-    orig(silent);
-    // También guardar en Firebase async
-    const data = {
-      projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
-      objects:     STATE.objects,
-      layers:      STATE.layers,
-      activeLayer: STATE.activeLayer,
-      actors:      STATE.actors,
-      rules:       typeof RULES !== 'undefined' ? RULES : [],
-      relations:   typeof RELATIONS !== 'undefined' ? RELATIONS : [],
-      assets:      typeof ASSETS !== 'undefined' ? ASSETS.map(a => { const c={...a}; delete c.audioEl; return c; }) : [],
-      savedAt:     new Date().toISOString(),
-    };
-    window._FB.saveProject(data).then(id => {
-      if (id) addLog('info', `☁️ Guardado en la nube: ${data.projectName}`);
-    });
-  };
-  saveProject = () => window._doSave(false);
-};
-
-/* ── Poblar lista de proyectos del Co-Director desde Firebase ── */
-window._CD_loadCloudProjects = async function() {
-  const list = document.getElementById('cd-proj-list');
-  if (!list) return;
-  list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.5);text-align:center;padding:12px;">Cargando proyectos ☁️…</div>';
-
-  // Proyectos locales
-  const localKeys = Object.keys(localStorage).filter(k => k.startsWith('pm_'));
-  // Proyectos en la nube
-  const cloudProjects = await window._FB.listProjects();
-
-  const allItems = [];
-
-  // Locales
-  localKeys.forEach(k => {
-    let name = 'Sin título', date = '';
-    try { const d = JSON.parse(localStorage.getItem(k)); name = d.projectName||'Sin título'; if(d.savedAt) date = new Date(d.savedAt).toLocaleDateString('es'); } catch {}
-    allItems.push({ key: k, name, date, source: 'local' });
+<!-- SERVIDOR: exponer eventos necesarios en server.js
+  socket.on('peer-profile', ({ sessionCode, profile, name }) => {
+    socket.to(sessionCode).emit('peer-profile', { fromId: socket.id, profile, name });
   });
+  socket.on('srv-save',  ({ reqId, userId, data })  => { /* guardar proyecto */ socket.emit('srv-response', { reqId, ok:true, data:{id} }); });
+  socket.on('srv-list',  ({ reqId, userId })         => { /* listar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:[...] }); });
+  socket.on('srv-load',  ({ reqId, userId, id })     => { /* cargar proyecto */  socket.emit('srv-response', { reqId, ok:true, data:{...} }); });
+  socket.on('srv-clear', ({ reqId, userId })         => { /* borrar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:null }); });
+-->
 
-  // Nube
-  cloudProjects.forEach(p => {
-    const date = p.savedAt?.toDate ? p.savedAt.toDate().toLocaleDateString('es') : '';
-    allItems.push({ key: '__fb__' + p._id, name: p.projectName || 'Sin título', date, source: 'cloud', fbData: p });
-  });
-
-  if (!allItems.length) {
-    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados aún</div>';
-    return;
-  }
-
-  list.innerHTML = allItems.map(item => `
-    <div class="cd-proj-item" data-key="${item.key}" onclick="CD.selectProject('${item.key}')">
-      <div class="cd-proj-icon">${item.source === 'cloud' ? '☁️' : '💾'}</div>
-      <div class="cd-proj-info">
-        <div class="cd-proj-name">${item.name}</div>
-        <div class="cd-proj-date">${item.source === 'cloud' ? '☁️ Nube' : '💾 Local'} · ${item.date}</div>
-      </div>
-      <div class="cd-proj-check" id="cdpc-${item.key}" style="display:none;">✓</div>
-    </div>`).join('');
-
-  // Guardar referencia a datos de nube para cuando el host envíe el proyecto
-  window._CD_cloudProjects = {};
-  cloudProjects.forEach(p => { window._CD_cloudProjects['__fb__' + p._id] = p; });
-};
-
-/* ── Parchar CD.open para cargar proyectos desde Firebase ── */
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => {
-    _fbSavePatch();
-
-    // Reemplazar _populateProjects del Co-Director con versión Firebase
-    if (typeof CD !== 'undefined') {
-      CD._populateProjects = async function() {
-        await window._CD_loadCloudProjects();
-      };
-
-      // Parchar selectProject para manejar proyectos de nube
-      const origSelect = CD.selectProject.bind(CD);
-      CD.selectProject = function(key) {
-        origSelect(key);
-        // Si es proyecto de nube, guardarlo para enviarlo
-        if (key.startsWith('__fb__') && window._CD_cloudProjects?.[key]) {
-          CD._selectedProjData = window._CD_cloudProjects[key];
-        } else {
-          CD._selectedProjData = null;
-        }
-      };
-
-      // Parchar _createSession para enviar datos de nube
-      const origCreate = CD._createSession.bind(CD);
-      CD._createSession = function() {
-        if (!CD.selectedProjKey) { CD._setStatus('yellow', 'Seleccioná un proyecto primero'); return; }
-        CD._setStatus('yellow', 'Conectando…');
-        CD._connect(() => {
-          const code = CD._genCode();
-          CD.sessionCode = code;
-          CD.isHost = true;
-          CD.socket.emit('create-session', { code, name: CD.myName, profile: CD._getProfile() });
-        });
-      };
-
-      // Parchar _onSessionReady para enviar proyecto correcto
-      const origReady = CD._onSessionReady.bind(CD);
-      CD._onSessionReady = function(code, peers) {
-        origReady(code, peers);
-        if (CD.isHost) {
-          let data = null;
-          const key = CD.selectedProjKey;
-          if (key?.startsWith('__fb__') && CD._selectedProjData) {
-            data = CD._selectedProjData;
-          } else if (key) {
-            try { data = JSON.parse(localStorage.getItem(key)); } catch {}
-          }
-          if (data) {
-            CD.socket.emit('project-load', data);
-            CD._log(`📤 Proyecto "${data.projectName}" enviado`);
-          }
-        }
-      };
-    }
-
-    addLog('info', '☁️ Firebase conectado · Proyectos guardados en la nube automáticamente.');
-  }, 1500);
-});
-</script>
