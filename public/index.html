@@ -21432,46 +21432,57 @@ const CD = {
     this._log(`📤 Re-enviando "${data.projectName}" a la sala`);
   },
 
-  /* ── Hookear CommandHistory para sync en tiempo real ── */
+  /* ── Hookear CommandHistory + eventos de canvas para sync en tiempo real ── */
   _patchCommandHistory() {
     if (this._cmdPatchDone) return;
     this._cmdPatchDone = true;
 
-    const orig = CommandHistory.execute.bind(CommandHistory);
-    CommandHistory.execute = (cmd) => {
-      orig(cmd);
-      if (!this.connected || this._broadcasting) return;
-      // Debounce: esperar 200ms antes de emitir (agrupa cambios rápidos)
-      clearTimeout(this._syncTimer);
-      this._syncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket) return;
-        const data = _buildSaveData();
-        this.socket.emit('project-update', data);
-      }, 200);
-    };
-
-    // También hookear undo/redo
-    const origUndo = CommandHistory.undo.bind(CommandHistory);
-    CommandHistory.undo = () => {
-      origUndo();
-      if (!this.connected || this._broadcasting) return;
+    const _emit = () => {
+      if (!this.connected || this._broadcasting || !this.socket) return;
       clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
         if (!this.connected || !this.socket) return;
         this.socket.emit('project-update', _buildSaveData());
       }, 200);
     };
+
+    // 1) CommandHistory.execute — cambios con historial (add, delete, move via cmd)
+    const orig = CommandHistory.execute.bind(CommandHistory);
+    CommandHistory.execute = (cmd) => { orig(cmd); _emit(); };
+
+    // 2) undo / redo
+    const origUndo = CommandHistory.undo.bind(CommandHistory);
+    CommandHistory.undo = () => { origUndo(); _emit(); };
 
     const origRedo = CommandHistory.redo.bind(CommandHistory);
-    CommandHistory.redo = () => {
-      origRedo();
+    CommandHistory.redo = () => { origRedo(); _emit(); };
+
+    // 3) Cambios directos en STATE que no pasan por CommandHistory:
+    //    drag, resize, pintar píxeles, mover canvas, etc.
+    //    Se detectan por pointerup / mouseup en el canvas del mundo.
+    const worldCanvas = document.getElementById('world-canvas');
+    if (worldCanvas) {
+      worldCanvas.addEventListener('pointerup', () => _emit());
+      worldCanvas.addEventListener('mouseleave', () => {
+        // Si el botón sigue presionado al salir del canvas, emitir igual
+        clearTimeout(this._syncTimer);
+        this._syncTimer = setTimeout(() => _emit(), 400);
+      });
+    }
+
+    // 4) También capturar pointerup global para cubrir handles y overlays del editor
+    document.addEventListener('pointerup', (e) => {
       if (!this.connected || this._broadcasting) return;
-      clearTimeout(this._syncTimer);
-      this._syncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket) return;
-        this.socket.emit('project-update', _buildSaveData());
-      }, 200);
-    };
+      // Solo disparar si el evento viene del área del workspace
+      const ws = document.getElementById('workspace');
+      if (ws && ws.contains(e.target)) _emit();
+    });
+
+    // 5) Teclado: cualquier tecla dentro del canvas (rename inline, etc.)
+    document.addEventListener('keyup', (e) => {
+      if (!this.connected || this._broadcasting) return;
+      if (['Delete','Backspace','Enter','Escape'].includes(e.key)) _emit();
+    });
   },
 
   /* ── Merge peers con perfiles conocidos ── */
@@ -21493,132 +21504,263 @@ const CD = {
     if (peers.length) this._renderDirectors(peers);
   },
 
-  /* ── Render tarjetas con perfil real y animación 3D ── */
+  /* ── Render tarjetas idénticas a las de perfil (dp-card) ── */
   _renderDirectors(peers) {
     const grid = document.getElementById('cd-directors-grid');
     if (!grid) return;
     const myId = this.socket?.id;
 
-    // Inyectar estilos 3D si no existen
+    // Inyectar estilos si no existen — copia exacta de dp-card
     if (!document.getElementById('cd-3d-style')) {
       const s = document.createElement('style');
       s.id = 'cd-3d-style';
       s.textContent = `
-        .cds-scene{width:128px;height:188px;perspective:700px;cursor:pointer;flex-shrink:0;user-select:none}
-        .cds-card{width:100%;height:100%;position:relative;transform-style:preserve-3d;
-          transition:transform .5s cubic-bezier(.34,1.2,.64,1);border-radius:18px}
-        .cds-scene:hover .cds-card{transform:rotateY(14deg) rotateX(-7deg) scale(1.05)}
-        .cds-card.spin{animation:cds-spin3d 1s cubic-bezier(.34,1.56,.64,1) forwards}
-        @keyframes cds-spin3d{
-          0%{transform:rotateY(0) scale(1)}
-          40%{transform:rotateY(180deg) scale(1.08)}
-          75%{transform:rotateY(340deg) scale(1.04)}
-          100%{transform:rotateY(360deg) scale(1)}}
-        .cds-front{position:absolute;inset:0;backface-visibility:hidden;border-radius:18px;
-          display:flex;flex-direction:column;align-items:center;padding:16px 10px 12px;gap:8px;
-          overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.06)}
-        .cds-front::after{content:'';position:absolute;inset:0;border-radius:18px;pointer-events:none;
-          background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px)}
-        .cds-shine{position:absolute;inset:0;border-radius:18px;pointer-events:none;opacity:0;transition:opacity .3s;
-          background:linear-gradient(125deg,transparent 30%,rgba(255,255,255,.07) 45%,rgba(255,255,255,.13) 50%,rgba(255,255,255,.07) 55%,transparent 70%)}
-        .cds-scene:hover .cds-shine{opacity:1}
-        .cds-ring{width:70px;height:70px;border-radius:50%;padding:3px;position:relative;z-index:1;
-          animation:cd-spin 7s linear infinite;flex-shrink:0}
-        .cds-inner{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;
-          overflow:hidden;font-size:30px;border:3px solid transparent}
-        .cds-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-        .cds-inner canvas{width:100%;height:100%;border-radius:50%;image-rendering:pixelated}
-        .cds-name{font-family:'Google Sans Display',sans-serif;font-size:11px;font-weight:700;color:#e9d5ff;
-          text-align:center;position:relative;z-index:1;max-width:112px;
-          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 0 12px rgba(102,157,246,.4)}
-        .cds-role{font-size:7.5px;color:rgba(102,157,246,.75);font-family:'Roboto Mono',monospace;
-          letter-spacing:.8px;text-transform:uppercase;position:relative;z-index:1}
-        .cds-badge{font-size:6.5px;font-weight:700;letter-spacing:.8px;padding:2px 7px;
-          border-radius:4px;position:relative;z-index:1}
-        .cds-badge.host{background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.4);color:#c084fc}
-        .cds-badge.guest{background:rgba(52,168,83,.15);border:1px solid rgba(52,168,83,.35);color:#4ade80}
-        .cds-you{font-size:7px;color:rgba(255,255,255,.4);background:rgba(255,255,255,.08);
-          border-radius:5px;padding:2px 6px;position:relative;z-index:1}
+        @keyframes cd-ring-spin { to { filter: hue-rotate(360deg); } }
+        .cds-scene {
+          width: 160px; height: 220px;
+          perspective: 900px; cursor: pointer;
+          flex-shrink: 0; user-select: none;
+        }
+        .cds-card {
+          width: 100%; height: 100%;
+          position: relative; transform-style: preserve-3d;
+          transition: transform .6s cubic-bezier(.4,0,.2,1);
+          border-radius: 18px;
+        }
+        .cds-scene:hover .cds-card { transform: rotateY(8deg) rotateX(-4deg) scale(1.04); }
+        .cds-card.flipped          { transform: rotateY(180deg) !important; }
+        .cds-front, .cds-back {
+          position: absolute; inset: 0;
+          backface-visibility: hidden; -webkit-backface-visibility: hidden;
+          border-radius: 18px; overflow: hidden;
+        }
+        .cds-back { transform: rotateY(180deg); }
+        /* Front */
+        .cds-front {
+          display: flex; flex-direction: column;
+          align-items: center; padding: 16px 12px 14px; gap: 8px;
+          box-shadow: 0 0 0 1px rgba(102,157,246,.1), 0 20px 60px rgba(0,0,0,.7),
+                      inset 0 1px 0 rgba(255,255,255,.07);
+        }
+        /* holographic shimmer */
+        .cds-front::before {
+          content: ''; position: absolute; inset: 0; border-radius: 18px;
+          background: linear-gradient(125deg, transparent 30%, rgba(102,157,246,.06) 45%,
+            rgba(168,85,247,.08) 55%, transparent 70%);
+          pointer-events: none; opacity: 0; transition: opacity .3s;
+        }
+        .cds-scene:hover .cds-front::before { opacity: 1; }
+        /* scan lines */
+        .cds-front::after {
+          content: ''; position: absolute; inset: 0; border-radius: 18px;
+          background: repeating-linear-gradient(0deg, transparent, transparent 2px,
+            rgba(0,0,0,.08) 2px, rgba(0,0,0,.08) 4px);
+          pointer-events: none;
+        }
+        /* Back */
+        .cds-back {
+          display: flex; flex-direction: column;
+          align-items: center; justify-content: center;
+          gap: 8px; padding: 16px;
+          box-shadow: 0 20px 60px rgba(0,0,0,.7);
+        }
+        .cds-header {
+          width: 100%; display: flex; align-items: center; justify-content: space-between;
+          font-size: 7.5px; font-weight: 700; letter-spacing: 1.5px;
+          text-transform: uppercase; color: rgba(102,157,246,.7);
+          font-family: 'Roboto Mono', monospace; position: relative; z-index: 1;
+        }
+        .cds-header-badge {
+          background: rgba(52,168,83,.15); border: 1px solid rgba(52,168,83,.3);
+          color: #34a853; border-radius: 4px; padding: 1px 5px;
+          font-size: 6.5px; letter-spacing: 1px;
+        }
+        .cds-ring {
+          width: 72px; height: 72px; border-radius: 50%; padding: 3px;
+          position: relative; z-index: 1;
+          animation: cd-ring-spin 8s linear infinite; flex-shrink: 0;
+        }
+        .cds-inner {
+          width: 100%; height: 100%; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          overflow: hidden; font-size: 32px; border: 2px solid transparent;
+        }
+        .cds-inner img   { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
+        .cds-inner canvas{ width:100%; height:100%; border-radius:50%; image-rendering:pixelated; }
+        .cds-name {
+          font-family: 'Google Sans Display', 'Google Sans', sans-serif;
+          font-size: 12px; font-weight: 700; color: #e6e1e5;
+          text-align: center; position: relative; z-index: 1;
+          text-shadow: 0 0 20px rgba(102,157,246,.4); letter-spacing: .3px;
+          max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .cds-role {
+          font-size: 7.5px; color: rgba(102,157,246,.8);
+          font-family: 'Roboto Mono', monospace;
+          letter-spacing: .8px; text-transform: uppercase; position: relative; z-index: 1;
+        }
+        .cds-divider {
+          width: 80%; height: 1px; position: relative; z-index: 1;
+          background: linear-gradient(90deg, transparent, rgba(102,157,246,.3), transparent);
+        }
+        .cds-badge {
+          font-size: 6.5px; font-weight: 700; letter-spacing: .8px;
+          padding: 2px 7px; border-radius: 4px; position: relative; z-index: 1;
+        }
+        .cds-badge.host  { background:rgba(139,92,246,.2);  border:1px solid rgba(139,92,246,.4);  color:#c084fc; }
+        .cds-badge.guest { background:rgba(52,168,83,.15);  border:1px solid rgba(52,168,83,.35);  color:#4ade80; }
+        .cds-you {
+          font-size: 7px; color: rgba(255,255,255,.4); background: rgba(255,255,255,.08);
+          border-radius: 5px; padding: 2px 6px; position: relative; z-index: 1;
+        }
+        .cds-uid {
+          font-size: 7px; color: rgba(255,255,255,.18);
+          font-family: 'Roboto Mono', monospace; letter-spacing: 1px;
+          position: relative; z-index: 1; margin-top: auto;
+        }
+        /* Back face contents */
+        .cds-qr {
+          width: 52px; height: 52px; background: white; border-radius: 5px;
+          display: flex; align-items: center; justify-content: center; padding: 3px;
+        }
+        .cds-qr canvas { image-rendering: pixelated; }
+        .cds-back-lbl {
+          font-size: 7.5px; color: rgba(102,157,246,.6);
+          font-family: 'Roboto Mono', monospace; letter-spacing: 1px; text-align: center;
+        }
+        .cds-back-name {
+          font-size: 8px; color: rgba(255,255,255,.35);
+          font-family: 'Roboto Mono', monospace; text-align: center; letter-spacing: .5px;
+        }
+        .cds-hint {
+          font-size: 8px; color: rgba(255,255,255,.2);
+          font-family: 'Roboto Mono', monospace; text-align: center;
+          letter-spacing: .5px; margin-top: 4px;
+        }
       `;
       document.head.appendChild(s);
     }
 
-    const THEMES = {
-      1:  {bg:'linear-gradient(145deg,#1a1825,#2a2640,#1e1c2e)',ring:'#1a73e8,#a855f7,#34a853,#fbbc04,#1a73e8',inner:'#1a1825',border:'rgba(102,157,246,.3)'},
-      2:  {bg:'linear-gradient(145deg,#0d1a0d,#0f2e1a,#0a1a10)',ring:'#10b981,#34d364,#059669,#6ee7b7,#10b981',inner:'#0a1a10',border:'rgba(52,211,100,.3)'},
-      3:  {bg:'linear-gradient(145deg,#1a0d0d,#2e1010,#1a0a0a)',ring:'#ea4335,#ff6b5b,#c62828,#ff8a65,#ea4335',inner:'#1a0a0a',border:'rgba(234,67,53,.3)'},
-      4:  {bg:'linear-gradient(145deg,#1a160a,#2e2508,#1a1500)',ring:'#fbbc04,#ffd600,#f57f17,#ffe57f,#fbbc04',inner:'#1a1500',border:'rgba(251,188,4,.3)'},
-      5:  {bg:'linear-gradient(145deg,#0e0e14,#17152a,#0c0b15)',ring:'#7c3aed,#a78bfa,#4c1d95,#c4b5fd,#7c3aed',inner:'#0c0b15',border:'rgba(139,92,246,.3)'},
-      6:  {bg:'linear-gradient(145deg,#0d1620,#102030,#0a1520)',ring:'#0ea5e9,#7dd3fc,#0369a1,#bae6fd,#0ea5e9',inner:'#0a1520',border:'rgba(125,211,252,.3)'},
-      7:  {bg:'linear-gradient(145deg,#111608,#1a2408,#0e1505)',ring:'#65a30d,#a3e635,#3f6212,#d9f99d,#65a30d',inner:'#0e1505',border:'rgba(163,230,53,.3)'},
-      8:  {bg:'linear-gradient(145deg,#1a0f08,#2d1a0a,#1a0e05)',ring:'#ea580c,#fb923c,#9a3412,#fed7aa,#ea580c',inner:'#1a0e05',border:'rgba(251,146,60,.3)'},
-      9:  {bg:'linear-gradient(145deg,#1a0d16,#2d1025,#180b18)',ring:'#be185d,#ec4899,#831843,#f9a8d4,#be185d',inner:'#180b18',border:'rgba(236,72,153,.3)'},
-      10: {bg:'linear-gradient(145deg,#0a1718,#0e2528,#081418)',ring:'#0d9488,#2dd4bf,#134e4a,#99f6e4,#0d9488',inner:'#081418',border:'rgba(45,212,191,.3)'},
-      11: {bg:'linear-gradient(145deg,#0e0e20,#141430,#0a0a1e)',ring:'#4338ca,#6366f1,#1e1b4b,#a5b4fc,#4338ca',inner:'#0a0a1e',border:'rgba(99,102,241,.3)'},
-      12: {bg:'linear-gradient(145deg,#12101e,#1e1530,#120e20)',ring:'#f43f5e,#f97316,#eab308,#22c55e,#3b82f6,#a855f7,#f43f5e',inner:'#12101e',border:'rgba(255,255,255,.18)'},
+    // Usar exactamente DP_CARD_THEMES_CSS (mismos temas que la tarjeta de perfil)
+    const THEMES = typeof DP_CARD_THEMES_CSS !== 'undefined' ? DP_CARD_THEMES_CSS : {
+      1: { bg:'linear-gradient(145deg,#1a1825 0%,#2a2640 50%,#1e1c2e 100%)', border:'rgba(102,157,246,.25)', ring:'#1a73e8,#a855f7,#34a853,#fbbc04,#1a73e8', inner:'#1a1825' },
     };
 
     grid.innerHTML = peers.map(p => {
       const isMe   = p.id === myId;
-      // Mezclar datos del servidor con perfiles conocidos localmente
       const cached = this._peers[p.id] || {};
       const prof   = p.profile || cached.profile || {};
       const tn     = prof.cardTheme || 1;
       const t      = THEMES[tn] || THEMES[1];
-      const cid    = 'cdc_' + (p.id || Math.random().toString(36).slice(2,8));
+      const cid    = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
+      const uid    = 'DG-' + btoa(p.name || 'D').replace(/[^A-Z0-9]/g,'').slice(0,8).padEnd(8,'0');
 
-      // Construir avatar HTML
+      // Avatar HTML — idéntico a dpRenderCard
       let avHtml = '';
       if (prof.avatarType === 'photo' && prof.photoDataUrl) {
-        avHtml = `<img src="${prof.photoDataUrl}" alt="${p.name}">`;
+        avHtml = `<img src="${prof.photoDataUrl}" alt="${p.name}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">`;
       } else if (prof.avatarType === 'pixel' && prof.avatarId) {
-        avHtml = `<canvas id="${cid}_av" width="64" height="64"></canvas>`;
+        avHtml = `<canvas id="${cid}_av" width="64" height="64" style="width:100%;height:100%;border-radius:50%;image-rendering:pixelated;"></canvas>`;
       } else {
         const EMOJIS = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
-        avHtml = `<span style="font-size:28px;">${prof.avatarEmoji || EMOJIS[(p.name||'').charCodeAt(0) % EMOJIS.length]}</span>`;
+        avHtml = `<span style="font-size:30px;line-height:1;">${prof.avatarEmoji || EMOJIS[(p.name||'D').charCodeAt(0) % EMOJIS.length]}</span>`;
       }
 
       return `
-        <div class="cds-scene" onclick="CD._spin('${cid}')">
-          <div class="cds-card" id="${cid}">
-            <div class="cds-front" style="background:${t.bg};border:1px solid ${t.border};">
-              <div class="cds-shine"></div>
-              <div class="cds-ring" style="background:conic-gradient(${t.ring});">
-                <div class="cds-inner" style="background:${t.inner};border-color:${t.inner};">${avHtml}</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+          <div class="cds-scene" id="${cid}_scene" onclick="CD._flipCard('${cid}')">
+            <div class="cds-card" id="${cid}">
+
+              <!-- FRONT — idéntico a dp-card-front -->
+              <div class="cds-front" style="background:${t.bg};border:1px solid ${t.border};">
+                <div class="cds-header">
+                  <span>Director Gamer</span>
+                  <span class="cds-header-badge">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</span>
+                </div>
+                <div class="cds-ring" style="background:conic-gradient(${t.ring});">
+                  <div class="cds-inner" style="background:${t.inner};border-color:${t.inner};">
+                    ${avHtml}
+                  </div>
+                </div>
+                <div class="cds-name">${p.name || 'Director'}</div>
+                <div class="cds-role">${prof.title || (p.role === 'Host' ? 'Game Director' : 'Co-Director')}</div>
+                <div class="cds-divider"></div>
+                <div class="cds-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
+                ${isMe ? '<div class="cds-you">● Tú</div>' : ''}
+                <div class="cds-uid">${uid}</div>
               </div>
-              <div class="cds-name">${p.name || 'Director'}</div>
-              <div class="cds-role">${p.role || 'Director'}</div>
-              <div class="cds-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
-              ${isMe ? '<div class="cds-you">● Tú</div>' : ''}
+
+              <!-- BACK — idéntico a dp-card-back -->
+              <div class="cds-back" style="background:${t.bg};border:1px solid ${t.border};">
+                <div class="cds-back-lbl">DIRECTOR GAMER<br>CREDENTIAL CARD</div>
+                <div class="cds-qr"><canvas id="${cid}_qr" width="46" height="46"></canvas></div>
+                <div class="cds-back-name">${uid}<br>${p.name || 'Director'}</div>
+                <div style="width:80%;height:1px;background:rgba(102,157,246,.2);"></div>
+                <div style="font-size:7px;color:rgba(255,255,255,.12);font-family:'Roboto Mono',monospace;">NO TRANSFERIBLE</div>
+              </div>
+
             </div>
           </div>
+          <div class="cds-hint">click para girar ↩</div>
         </div>`;
     }).join('');
 
-    // Dibujar pixel avatars
+    // Post-render: pixel avatars, QR, tilt — igual que dpRenderCard
     requestAnimationFrame(() => {
       peers.forEach(p => {
         const cached = this._peers[p.id] || {};
         const prof   = p.profile || cached.profile || {};
+        const cid    = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
+
+        // Pixel avatar
         if (prof.avatarType === 'pixel' && prof.avatarId && typeof DP_PIXEL_AVATARS !== 'undefined') {
-          const cid = 'cdc_' + (p.id || '');
-          const c   = document.getElementById(cid + '_av');
-          if (c) {
-            const av = DP_PIXEL_AVATARS.find(a => a.id === prof.avatarId) || DP_PIXEL_AVATARS[0];
-            if (av && typeof dpDrawPixelAvatar === 'function') dpDrawPixelAvatar(c, av, 64);
+          const c  = document.getElementById(cid + '_av');
+          const av = DP_PIXEL_AVATARS.find(a => a.id === prof.avatarId) || DP_PIXEL_AVATARS[0];
+          if (c && av && typeof dpDrawPixelAvatar === 'function') dpDrawPixelAvatar(c, av, 64);
+        }
+
+        // QR decorativo — mismo algoritmo que dpDrawQR
+        const qc = document.getElementById(cid + '_qr');
+        if (qc) {
+          const ctx = qc.getContext('2d');
+          const s = 3;
+          ctx.fillStyle = '#fff'; ctx.fillRect(0,0,46,46);
+          const seed = (p.name || 'D').split('').reduce((a,ch)=>a*31+ch.charCodeAt(0),7);
+          const bit = i => (seed>>(i%32)&1)||((i*7+13)%3===0)?1:0;
+          ctx.fillStyle = '#111';
+          let i = 0;
+          for (let row=0;row<11;row++) for (let col=0;col<11;col++) {
+            const inCorner=(row<3&&col<3)||(row<3&&col>7)||(row>7&&col<3);
+            const inInner=(row===1&&col===1)||(row===1&&col===9)||(row===9&&col===1);
+            if (inCorner) { ctx.fillStyle='#111'; ctx.fillRect(col*s,row*s,s,s); }
+            else if (inInner) { ctx.fillStyle='#fff'; ctx.fillRect(col*s,row*s,s,s); }
+            else if (bit(i++)) { ctx.fillStyle='#111'; ctx.fillRect(col*s,row*s,s,s); }
+            i++;
           }
+        }
+
+        // Tilt — mismo efecto que dpInitTilt
+        const scene = document.getElementById(cid + '_scene');
+        const card  = document.getElementById(cid);
+        if (scene && card) {
+          scene.addEventListener('mousemove', e => {
+            if (card.classList.contains('flipped')) return;
+            const r = scene.getBoundingClientRect();
+            const x = (e.clientX - r.left) / r.width  - 0.5;
+            const y = (e.clientY - r.top)  / r.height - 0.5;
+            card.style.transform = `rotateY(${x*22}deg) rotateX(${-y*16}deg) scale(1.04)`;
+          });
+          scene.addEventListener('mouseleave', () => {
+            if (!card.classList.contains('flipped')) card.style.transform = '';
+          });
         }
       });
     });
   },
 
-  _spin(cid) {
-    const c = document.getElementById(cid);
-    if (!c) return;
-    c.classList.remove('spin');
-    void c.offsetWidth;
-    c.classList.add('spin');
-    c.addEventListener('animationend', () => c.classList.remove('spin'), { once: true });
+  _flipCard(cid) {
+    const card = document.getElementById(cid);
+    if (card) card.classList.toggle('flipped');
   },
 
   /* ── Desconectar ── */
