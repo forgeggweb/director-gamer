@@ -16130,15 +16130,47 @@ function _applyProjectData(data, _fromCD) {
         setTimeout(() => { if(typeof _fitWorldToView==='function') _fitWorldToView(data.worldW, data.worldH); }, 80);
       }
     }
-    STATE.objects = [];
-    // Solo restaurar assets si el payload los trae (full sync).
-    // En updates incrementales (sin assets) conservar los existentes.
+    // ── Restaurar assets ──
+    // Full sync (data.assets presente): reemplazar completamente.
+    // Update incremental (sin assets): conservar los ASSETS locales existentes.
     if (data.assets !== undefined && typeof _restoreAssets === 'function') {
       _restoreAssets(data);
     }
+
+    // ── Merge inteligente de objetos ──
+    // En updates incrementales, el payload viene sin imgUrl/spriteSheet.url/frames
+    // (fueron stripeados para ahorrar ancho de banda). Hay que preservar las
+    // propiedades de textura que ya tiene el receptor en STATE.objects.
+    const isIncrementalUpdate = _fromCD && data.assets === undefined;
+    const prevObjMap = {};
+    if (isIncrementalUpdate) {
+      (STATE.objects || []).forEach(o => { prevObjMap[o.id] = o; });
+    }
+
+    STATE.objects = [];
     for (const o of (data.objects || [])) {
-      STATE.objects.push(o);
-      if (typeof renderWorldObj === 'function') renderWorldObj(o);
+      let finalObj = o;
+      if (isIncrementalUpdate && prevObjMap[o.id]) {
+        const prev = prevObjMap[o.id];
+        // Preservar texturas del objeto local si el payload las trae vacías/sin definir
+        finalObj = { ...o };
+        if (!finalObj.imgUrl           && prev.imgUrl)           finalObj.imgUrl           = prev.imgUrl;
+        if (!finalObj.spriteSheet?.url && prev.spriteSheet?.url) {
+          finalObj.spriteSheet = { ...(finalObj.spriteSheet || {}), url: prev.spriteSheet.url };
+        }
+        // Preservar frames de animaciones si el payload las trajo vacías
+        if (finalObj.animations && prev.animations) {
+          finalObj.animations = finalObj.animations.map((anim, idx) => {
+            const prevAnim = prev.animations[idx];
+            if (prevAnim && (!anim.frames || anim.frames.length === 0) && prevAnim.frames && prevAnim.frames.length > 0) {
+              return { ...anim, frames: prevAnim.frames, frameMode: prevAnim.frameMode || anim.frameMode };
+            }
+            return anim;
+          });
+        }
+      }
+      STATE.objects.push(finalObj);
+      if (typeof renderWorldObj === 'function') renderWorldObj(finalObj);
     }
     if (data.actors)    { STATE.actors = data.actors;        if(typeof renderActorLib  ==='function') renderActorLib(); }
     if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
@@ -16147,8 +16179,9 @@ function _applyProjectData(data, _fromCD) {
     if (typeof renderLayers    === 'function') renderLayers();
     if (typeof updateStatusBar === 'function') updateStatusBar();
     // Aplicar texturas DESPUÉS de todos los renders para evitar que re-renders borren las imágenes
+    // Usar STATE.objects (ya mergeado con texturas locales) en vez de data.objects
     requestAnimationFrame(() => {
-      for (const o of (data.objects || [])) {
+      for (const o of STATE.objects) {
         if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
       }
     });
@@ -20116,6 +20149,19 @@ function dpSaveProfile() {
   dpSave();
   toast('✅ Perfil guardado');
 
+  // Si el Co-Director está conectado, re-emitir el perfil actualizado
+  // para que los demás vean el nombre/foto nuevo de inmediato
+  if (window.CD && window.CD.connected && window.CD.socket) {
+    try {
+      window.CD.socket.emit('peer-profile', {
+        sessionCode: window.CD.sessionCode,
+        profile:     window.CD._getProfile(),
+        name:        window.CD._getProfile().name,
+      });
+      window.CD._refreshCards(); // actualizar tarjeta propia localmente
+    } catch(e) {}
+  }
+
   // Animate save button
   const btn = document.querySelector('.dp-save-btn');
   if (btn) {
@@ -22582,26 +22628,40 @@ const CD = {
     this._cursors = {};
   },
 
-  /* ── Obtener perfil activo — usa las claves del usuario activo ── */
+  /* ── Obtener perfil activo ──
+     FUENTE DE VERDAD: _dpProfile (variable global siempre actualizada).
+     _dpProfile se carga en dpLoad() al hacer login y se actualiza en
+     dpSaveProfile(). El sistema PSO es secundario; si tiene datos los mezcla.  */
   _getProfile() {
     try {
-      // Usar las claves redirigidas al namespace del usuario (seteadas en dglSubmit)
-      const profKey   = window._DG_PSO_PROFILES_KEY || 'dg_profiles_list';
-      const activeKey = window._DG_PSO_ACTIVE_KEY   || 'dg_active_profile';
-      const list = JSON.parse(localStorage.getItem(profKey) || '[]');
-      const idx  = parseInt(localStorage.getItem(activeKey) || '0');
-      // Devuelve solo datos de UI — sin datos de proyecto
-      const p = list[idx] || {};
+      // 1) Base real: variable global _dpProfile (panel de perfil del usuario)
+      const dp = (typeof _dpProfile !== 'undefined') ? _dpProfile : {};
+
+      // 2) Intentar PSO como complemento (opcional)
+      let pso = {};
+      try {
+        const profKey   = window._DG_PSO_PROFILES_KEY || 'dg_profiles_list';
+        const activeKey = window._DG_PSO_ACTIVE_KEY   || 'dg_active_profile';
+        const list = JSON.parse(localStorage.getItem(profKey) || '[]');
+        const idx  = parseInt(localStorage.getItem(activeKey) || '0');
+        pso = list[idx] || {};
+      } catch(e) {}
+
+      // 3) _dpProfile tiene prioridad sobre PSO
+      const merged = Object.assign({}, pso, dp);
+
       return {
-        name:         p.name         || this.myName || 'Director',
-        title:        p.title        || '',
-        avatarType:   p.avatarType   || 'emoji',
-        avatarEmoji:  p.avatarEmoji  || '🎮',
-        avatarId:     p.avatarId     || null,
-        photoDataUrl: p.photoDataUrl || null,
-        cardTheme:    p.cardTheme    || 1,
+        name:         merged.name         || this.myName || 'Director',
+        title:        merged.title        || '',
+        avatarType:   merged.avatarType   || 'emoji',
+        avatarEmoji:  merged.avatarEmoji  || '🎮',
+        avatarId:     merged.avatarId     || null,
+        photoDataUrl: merged.photoDataUrl || null,
+        cardTheme:    merged.cardTheme    || 1,
       };
-    } catch { return { name: this.myName || 'Director', cardTheme: 1 }; }
+    } catch(e) {
+      return { name: this.myName || 'Director', avatarType: 'emoji', avatarEmoji: '🎮', cardTheme: 1 };
+    }
   },
 
   /* ── Helpers UI ── */
