@@ -19719,7 +19719,10 @@ window.exportObjectSheet   = exportObjectSheet;
    PERFIL DE DIRECTOR — Tarjeta 3D editable
    ══════════════════════════════════════════════════ */
 
-const DP_STORAGE_KEY = 'dg_director_profile';
+// La clave de perfil activo también usa namespace por usuario
+// Se lee desde window._DG_DP_STORAGE_KEY que se setea en _applyProfileNamespace
+const DP_STORAGE_KEY_DEFAULT = 'dg_director_profile';
+function _dpStorageKey() { return window._DG_DP_STORAGE_KEY || DP_STORAGE_KEY_DEFAULT; }
 
 // Pixel-art avatar definitions (8×8 palettes drawn on 16×16 canvas)
 const DP_PIXEL_AVATARS = [
@@ -19818,13 +19821,13 @@ let _dpProfile = {
 
 function dpLoad() {
   try {
-    const s = localStorage.getItem(DP_STORAGE_KEY);
+    const s = localStorage.getItem(_dpStorageKey());
     if (s) _dpProfile = { ..._dpProfile, ...JSON.parse(s) };
   } catch(e) {}
 }
 
 function dpSave() {
-  try { localStorage.setItem(DP_STORAGE_KEY, JSON.stringify(_dpProfile)); } catch(e) {}
+  try { localStorage.setItem(_dpStorageKey(), JSON.stringify(_dpProfile)); } catch(e) {}
 }
 
 function dpCountProjects() {
@@ -19835,7 +19838,8 @@ function dpCountProjects() {
 function dpRenderCard() {
   const root = document.getElementById('director-profile-root');
   if (!root) return;
-  dpLoad();
+  // Solo cargar si ya hay un namespace de usuario activo (post-login)
+  if (window._DG_DP_STORAGE_KEY) dpLoad();
   _dpProfile.projects = dpCountProjects();
 
   const avatarHTML = (() => {
@@ -20163,7 +20167,7 @@ window._dpOnOpen = function() {
 
 // (perfil hook integrated into switchSettingsTab directly)
 
-dpLoad();
+// dpLoad() NO se llama aquí — se carga en _applyProfileNamespace() tras el login
 
 /* ══════════════════════════════════════════════════
    PROFILE SELECTOR SYSTEM — Multi-profile (max 5)
@@ -20194,10 +20198,16 @@ function psoGetActiveIdx() {
 }
 function psoSetActiveIdx(idx) {
   try { localStorage.setItem(_psoActiveKey(), String(idx)); } catch(e) {}
-  // Sincronizar _dpProfile para que el resto de la app lo use
+  // Sincronizar _dpProfile con el perfil seleccionado
   if (_psoProfiles[idx]) {
-    _dpProfile = { ..._dpProfile, ..._psoProfiles[idx] };
-    dpSave();
+    // Resetear a defaults primero para evitar contaminación de perfiles anteriores
+    _dpProfile = {
+      name: 'Director', title: 'Game Designer', avatarType: 'emoji',
+      avatarEmoji: '🎮', avatarId: 'px_hero', photoDataUrl: null,
+      projects: 0, score: 0,
+      ..._psoProfiles[idx]   // aplicar el perfil seleccionado encima
+    };
+    dpSave(); // guarda en la clave del usuario actual (_dpStorageKey())
   }
 }
 
@@ -21091,11 +21101,31 @@ function dglSubmit() {
 }
 
 /* ── Aplicar namespace de perfiles para un uid dado ── */
-/* Simplemente actualiza las variables window._DG_PSO_* que todas las
-   funciones psoXxx leen dinamicamente via _psoProfilesKey() / _psoActiveKey() */
+/* Setea TODAS las claves de localStorage al namespace del usuario autenticado,
+   luego recarga el perfil activo para que la app vea los datos correctos.    */
 function _applyProfileNamespace(uid) {
+  // Namespace para la lista de perfiles (PSO)
   window._DG_PSO_PROFILES_KEY = DGL._profilesKey(uid);
   window._DG_PSO_ACTIVE_KEY   = DGL._activeKey(uid);
+  // Namespace para el perfil activo (DP) — clave propia por usuario
+  window._DG_DP_STORAGE_KEY   = 'dg_dp_' + uid;
+
+  // Resetear _dpProfile a defaults antes de cargar el del usuario
+  _dpProfile = {
+    name: 'Director', title: 'Game Designer', avatarType: 'emoji',
+    avatarEmoji: '🎮', avatarId: 'px_hero', photoDataUrl: null,
+    projects: 0, score: 0
+  };
+
+  // Cargar el perfil activo del usuario (desde su namespace)
+  dpLoad();
+
+  // Además, sincronizar con el perfil PSO activo si existe
+  psoLoadProfiles();
+  const activeIdx = psoGetActiveIdx();
+  if (_psoProfiles[activeIdx]) {
+    _dpProfile = { ..._dpProfile, ..._psoProfiles[activeIdx] };
+  }
 }
 
 /* ── Iniciar: mostrar login antes que cualquier otra cosa ── */
