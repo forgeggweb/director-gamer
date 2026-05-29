@@ -21479,3 +21479,219 @@ document.addEventListener('DOMContentLoaded', () => {
   addLog('info', '🎬 Co-Director listo · Hacé clic en el botón "Co-Director" para colaborar.');
 });
 </script>
+
+<!-- ═══════════════════════════════════════════════════════
+     FIREBASE — Guardado en la nube + Co-Director cloud
+═══════════════════════════════════════════════════════ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, collection, getDocs, deleteDoc, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyAmGX9jK4EjJh5DBlYueZezuvxy2zTmMXU",
+  authDomain:        "director-gamer.firebaseapp.com",
+  projectId:         "director-gamer",
+  storageBucket:     "director-gamer.firebasestorage.app",
+  messagingSenderId: "762351067208",
+  appId:             "1:762351067208:web:585526fd14c6d63303b87d",
+  measurementId:     "G-LQDZ6GJMKY"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const db    = getFirestore(fbApp);
+
+/* ── Exponer al scope global para que el Co-Director lo use ── */
+window._FB = {
+  /* Guardar proyecto en Firestore */
+  async saveProject(data) {
+    try {
+      const id = (data.projectName || 'sin-titulo')
+        .toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'').slice(0,40)
+        + '-' + Date.now();
+      await setDoc(doc(db, 'projects', id), {
+        ...data,
+        _id: id,
+        savedAt: serverTimestamp(),
+        // No guardar imágenes base64 grandes en Firestore — solo metadatos y estructura
+        assets: (data.assets||[]).map(a => {
+          const c = {...a};
+          // Recortar base64 muy grandes
+          if (c.url && c.url.startsWith('data:') && c.url.length > 50000) {
+            c.url = c.url.slice(0, 50000) + '…[truncado]';
+          }
+          return c;
+        }),
+      });
+      console.log('☁️ Guardado en Firestore:', id);
+      return id;
+    } catch(e) {
+      console.warn('Firebase save error:', e);
+      return null;
+    }
+  },
+
+  /* Cargar lista de proyectos */
+  async listProjects() {
+    try {
+      const snap = await getDocs(collection(db, 'projects'));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch(e) {
+      console.warn('Firebase list error:', e);
+      return [];
+    }
+  },
+
+  /* Cargar un proyecto por ID */
+  async loadProject(id) {
+    try {
+      const snap = await getDoc(doc(db, 'projects', id));
+      return snap.exists() ? snap.data() : null;
+    } catch(e) {
+      console.warn('Firebase load error:', e);
+      return null;
+    }
+  },
+
+  /* Eliminar proyecto */
+  async deleteProject(id) {
+    try {
+      await deleteDoc(doc(db, 'projects', id));
+    } catch(e) {
+      console.warn('Firebase delete error:', e);
+    }
+  }
+};
+
+/* ── Parchear _doSave para también guardar en Firebase ── */
+const _origDoSave = window._doSave || null;
+const _fbSavePatch = () => {
+  if (typeof _doSave !== 'function') return;
+  const orig = _doSave;
+  window._doSave = function(silent = false) {
+    orig(silent);
+    // También guardar en Firebase async
+    const data = {
+      projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
+      objects:     STATE.objects,
+      layers:      STATE.layers,
+      activeLayer: STATE.activeLayer,
+      actors:      STATE.actors,
+      rules:       typeof RULES !== 'undefined' ? RULES : [],
+      relations:   typeof RELATIONS !== 'undefined' ? RELATIONS : [],
+      assets:      typeof ASSETS !== 'undefined' ? ASSETS.map(a => { const c={...a}; delete c.audioEl; return c; }) : [],
+      savedAt:     new Date().toISOString(),
+    };
+    window._FB.saveProject(data).then(id => {
+      if (id) addLog('info', `☁️ Guardado en la nube: ${data.projectName}`);
+    });
+  };
+  saveProject = () => window._doSave(false);
+};
+
+/* ── Poblar lista de proyectos del Co-Director desde Firebase ── */
+window._CD_loadCloudProjects = async function() {
+  const list = document.getElementById('cd-proj-list');
+  if (!list) return;
+  list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.5);text-align:center;padding:12px;">Cargando proyectos ☁️…</div>';
+
+  // Proyectos locales
+  const localKeys = Object.keys(localStorage).filter(k => k.startsWith('pm_'));
+  // Proyectos en la nube
+  const cloudProjects = await window._FB.listProjects();
+
+  const allItems = [];
+
+  // Locales
+  localKeys.forEach(k => {
+    let name = 'Sin título', date = '';
+    try { const d = JSON.parse(localStorage.getItem(k)); name = d.projectName||'Sin título'; if(d.savedAt) date = new Date(d.savedAt).toLocaleDateString('es'); } catch {}
+    allItems.push({ key: k, name, date, source: 'local' });
+  });
+
+  // Nube
+  cloudProjects.forEach(p => {
+    const date = p.savedAt?.toDate ? p.savedAt.toDate().toLocaleDateString('es') : '';
+    allItems.push({ key: '__fb__' + p._id, name: p.projectName || 'Sin título', date, source: 'cloud', fbData: p });
+  });
+
+  if (!allItems.length) {
+    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados aún</div>';
+    return;
+  }
+
+  list.innerHTML = allItems.map(item => `
+    <div class="cd-proj-item" data-key="${item.key}" onclick="CD.selectProject('${item.key}')">
+      <div class="cd-proj-icon">${item.source === 'cloud' ? '☁️' : '💾'}</div>
+      <div class="cd-proj-info">
+        <div class="cd-proj-name">${item.name}</div>
+        <div class="cd-proj-date">${item.source === 'cloud' ? '☁️ Nube' : '💾 Local'} · ${item.date}</div>
+      </div>
+      <div class="cd-proj-check" id="cdpc-${item.key}" style="display:none;">✓</div>
+    </div>`).join('');
+
+  // Guardar referencia a datos de nube para cuando el host envíe el proyecto
+  window._CD_cloudProjects = {};
+  cloudProjects.forEach(p => { window._CD_cloudProjects['__fb__' + p._id] = p; });
+};
+
+/* ── Parchar CD.open para cargar proyectos desde Firebase ── */
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    _fbSavePatch();
+
+    // Reemplazar _populateProjects del Co-Director con versión Firebase
+    if (typeof CD !== 'undefined') {
+      CD._populateProjects = async function() {
+        await window._CD_loadCloudProjects();
+      };
+
+      // Parchar selectProject para manejar proyectos de nube
+      const origSelect = CD.selectProject.bind(CD);
+      CD.selectProject = function(key) {
+        origSelect(key);
+        // Si es proyecto de nube, guardarlo para enviarlo
+        if (key.startsWith('__fb__') && window._CD_cloudProjects?.[key]) {
+          CD._selectedProjData = window._CD_cloudProjects[key];
+        } else {
+          CD._selectedProjData = null;
+        }
+      };
+
+      // Parchar _createSession para enviar datos de nube
+      const origCreate = CD._createSession.bind(CD);
+      CD._createSession = function() {
+        if (!CD.selectedProjKey) { CD._setStatus('yellow', 'Seleccioná un proyecto primero'); return; }
+        CD._setStatus('yellow', 'Conectando…');
+        CD._connect(() => {
+          const code = CD._genCode();
+          CD.sessionCode = code;
+          CD.isHost = true;
+          CD.socket.emit('create-session', { code, name: CD.myName });
+        });
+      };
+
+      // Parchar _onSessionReady para enviar proyecto correcto
+      const origReady = CD._onSessionReady.bind(CD);
+      CD._onSessionReady = function(code, peers) {
+        origReady(code, peers);
+        if (CD.isHost) {
+          let data = null;
+          const key = CD.selectedProjKey;
+          if (key?.startsWith('__fb__') && CD._selectedProjData) {
+            data = CD._selectedProjData;
+          } else if (key) {
+            try { data = JSON.parse(localStorage.getItem(key)); } catch {}
+          }
+          if (data) {
+            CD.socket.emit('project-load', data);
+            CD._log(`📤 Proyecto "${data.projectName}" enviado`);
+          }
+        }
+      };
+    }
+
+    addLog('info', '☁️ Firebase conectado · Proyectos guardados en la nube automáticamente.');
+  }, 1500);
+});
+</script>
