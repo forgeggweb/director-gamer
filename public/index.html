@@ -21437,6 +21437,7 @@ const CD = {
     if (this._cmdPatchDone) return;
     this._cmdPatchDone = true;
 
+    // Función de emit con debounce
     const _emit = () => {
       if (!this.connected || this._broadcasting || !this.socket) return;
       clearTimeout(this._syncTimer);
@@ -21446,9 +21447,9 @@ const CD = {
       }, 200);
     };
 
-    // 1) CommandHistory.execute — cambios con historial (add, delete, move via cmd)
-    const orig = CommandHistory.execute.bind(CommandHistory);
-    CommandHistory.execute = (cmd) => { orig(cmd); _emit(); };
+    // 1) CommandHistory.execute — add, delete, setprop vía inspector
+    const origExec = CommandHistory.execute.bind(CommandHistory);
+    CommandHistory.execute = (cmd) => { origExec(cmd); _emit(); };
 
     // 2) undo / redo
     const origUndo = CommandHistory.undo.bind(CommandHistory);
@@ -21457,31 +21458,31 @@ const CD = {
     const origRedo = CommandHistory.redo.bind(CommandHistory);
     CommandHistory.redo = () => { origRedo(); _emit(); };
 
-    // 3) Cambios directos en STATE que no pasan por CommandHistory:
-    //    drag, resize, pintar píxeles, mover canvas, etc.
-    //    Se detectan por pointerup / mouseup en el canvas del mundo.
-    const worldCanvas = document.getElementById('world-canvas');
-    if (worldCanvas) {
-      worldCanvas.addEventListener('pointerup', () => _emit());
-      worldCanvas.addEventListener('mouseleave', () => {
-        // Si el botón sigue presionado al salir del canvas, emitir igual
-        clearTimeout(this._syncTimer);
-        this._syncTimer = setTimeout(() => _emit(), 400);
-      });
+    // 3) _stack.push directo — usado por canvasUp (drag) y startResize (resize)
+    //    Ambas funciones hacen _stack.push(cmd) sin pasar por execute()
+    const origPush = CommandHistory._stack.push.bind(CommandHistory._stack);
+    CommandHistory._stack.push = (...args) => {
+      const r = origPush(...args);
+      _emit();
+      return r;
+    };
+
+    // 4) Fin de pintura / borrado de tiles — TM.painting = false no dispara nada
+    //    Parcheamos canvasUp directamente
+    const origCanvasUp = window.canvasUp;
+    if (typeof origCanvasUp === 'function') {
+      window.canvasUp = (e) => {
+        origCanvasUp(e);
+        // Si estaba pintando o borrando tiles, emitir después de terminar
+        _emit();
+      };
     }
 
-    // 4) También capturar pointerup global para cubrir handles y overlays del editor
-    document.addEventListener('pointerup', (e) => {
-      if (!this.connected || this._broadcasting) return;
-      // Solo disparar si el evento viene del área del workspace
-      const ws = document.getElementById('workspace');
-      if (ws && ws.contains(e.target)) _emit();
-    });
-
-    // 5) Teclado: cualquier tecla dentro del canvas (rename inline, etc.)
+    // 5) Teclado: Delete / Backspace borran objetos via CommandHistory.execute,
+    //    pero también cubrimos otros atajos
     document.addEventListener('keyup', (e) => {
       if (!this.connected || this._broadcasting) return;
-      if (['Delete','Backspace','Enter','Escape'].includes(e.key)) _emit();
+      if (['Delete','Backspace'].includes(e.key)) _emit();
     });
   },
 
