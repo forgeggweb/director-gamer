@@ -20669,3 +20669,813 @@ window.openWelcome = function() {
 
 </body>
 </html>
+
+<!-- ═══════════════════════════════════════════════════════
+     CO-DIRECTOR — Socket.io / Render
+     Diseño nuevo · Host elige el proyecto
+═══════════════════════════════════════════════════════ -->
+
+<!-- Socket.io client desde el servidor -->
+<script src="/socket.io/socket.io.js"></script>
+
+<style>
+/* ── Botón topbar ── */
+.cd-topbar-btn {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 14px;
+  background: linear-gradient(135deg, rgba(139,92,246,.18), rgba(59,130,246,.12));
+  border: 1px solid rgba(139,92,246,.4);
+  border-radius: 20px;
+  color: #c084fc;
+  font-family: 'Google Sans', sans-serif;
+  font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+  transition: all .2s;
+  position: relative;
+}
+.cd-topbar-btn:hover {
+  background: linear-gradient(135deg, rgba(139,92,246,.32), rgba(59,130,246,.22));
+  border-color: #a855f7;
+  color: #e9d5ff;
+  box-shadow: 0 0 16px rgba(168,85,247,.25);
+}
+.cd-topbar-btn.live {
+  background: linear-gradient(135deg, rgba(52,168,83,.18), rgba(16,185,129,.12));
+  border-color: rgba(52,168,83,.5);
+  color: #4ade80;
+}
+.cd-topbar-btn.live:hover { box-shadow: 0 0 16px rgba(52,168,83,.3); }
+.cd-pulse {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #a855f7;
+  animation: cd-blink 2s ease-in-out infinite;
+}
+.cd-topbar-btn.live .cd-pulse { background: #4ade80; }
+@keyframes cd-blink {
+  0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(168,85,247,.5); }
+  50%      { opacity:.5; box-shadow: 0 0 0 4px rgba(168,85,247,0); }
+}
+
+/* ── Overlay backdrop ── */
+#cd-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.7);
+  backdrop-filter: blur(8px);
+  z-index: 9500;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity .25s;
+}
+#cd-overlay.open { opacity:1; pointer-events: all; }
+
+/* ── Shell principal ── */
+.cd-shell {
+  width: 500px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  background: linear-gradient(160deg, #1a1825 0%, #211e2e 60%, #1c1928 100%);
+  border: 1px solid rgba(139,92,246,.3);
+  border-radius: 20px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(139,92,246,.1), inset 0 1px 0 rgba(255,255,255,.06);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  animation: cd-pop .28s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes cd-pop {
+  from { transform: scale(.88) translateY(20px); opacity:0; }
+  to   { transform: scale(1) translateY(0); opacity:1; }
+}
+
+/* ── Header ── */
+.cd-header {
+  padding: 22px 24px 18px;
+  background: linear-gradient(90deg, rgba(139,92,246,.12), rgba(59,130,246,.06));
+  border-bottom: 1px solid rgba(139,92,246,.15);
+  display: flex; align-items: center; gap: 12px;
+}
+.cd-header-glow {
+  width: 40px; height: 40px; border-radius: 12px;
+  background: linear-gradient(135deg, #7c3aed, #3b82f6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  box-shadow: 0 4px 16px rgba(124,58,237,.4);
+  flex-shrink: 0;
+}
+.cd-header-text h2 {
+  font-family: 'Google Sans Display', sans-serif;
+  font-size: 17px; font-weight: 700; color: #e9d5ff;
+  margin-bottom: 2px;
+}
+.cd-header-text p { font-size: 11.5px; color: rgba(196,180,214,.6); }
+.cd-header-close {
+  margin-left: auto;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(255,255,255,.06); border: none;
+  color: rgba(196,180,214,.6); font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all .15s; flex-shrink: 0;
+}
+.cd-header-close:hover { background: rgba(255,255,255,.12); color: #e9d5ff; }
+
+/* ── Body ── */
+.cd-body { padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+
+/* ── Modo cards ── */
+.cd-mode-row { display: flex; gap: 12px; }
+.cd-mode-card {
+  flex: 1; padding: 18px 14px; border-radius: 14px;
+  background: rgba(255,255,255,.04);
+  border: 1.5px solid rgba(139,92,246,.2);
+  cursor: pointer; text-align: center;
+  transition: all .22s cubic-bezier(.34,1.56,.64,1);
+}
+.cd-mode-card:hover {
+  border-color: #a855f7;
+  background: rgba(139,92,246,.1);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.cd-mode-card.active {
+  border-color: #a855f7;
+  background: linear-gradient(135deg, rgba(139,92,246,.18), rgba(59,130,246,.1));
+  box-shadow: 0 0 0 1px rgba(139,92,246,.3), 0 8px 24px rgba(0,0,0,.3);
+}
+.cd-mode-icon { font-size: 28px; margin-bottom: 8px; }
+.cd-mode-title { font-size: 13px; font-weight: 700; color: #e9d5ff; margin-bottom: 4px; }
+.cd-mode-desc  { font-size: 10.5px; color: rgba(196,180,214,.55); line-height: 1.5; }
+
+/* ── Campos ── */
+.cd-field { display: flex; flex-direction: column; gap: 6px; }
+.cd-label { font-size: 11px; font-weight: 600; color: rgba(196,180,214,.7); letter-spacing: .5px; text-transform: uppercase; }
+.cd-input {
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(139,92,246,.25);
+  border-radius: 10px; color: #e9d5ff;
+  font-size: 13.5px; padding: 10px 14px;
+  outline: none; font-family: 'Roboto Mono', monospace;
+  transition: border-color .15s;
+  width: 100%;
+}
+.cd-input:focus { border-color: #a855f7; box-shadow: 0 0 0 3px rgba(168,85,247,.15); }
+
+/* ── Código de sesión ── */
+.cd-code-box {
+  background: rgba(0,0,0,.3);
+  border: 1.5px solid rgba(139,92,246,.35);
+  border-radius: 14px; padding: 16px 20px;
+  display: flex; align-items: center; gap: 14px;
+}
+.cd-code-val {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 26px; font-weight: 700;
+  color: #c084fc; letter-spacing: 6px; flex: 1;
+}
+.cd-copy-btn {
+  background: rgba(139,92,246,.2);
+  border: 1px solid rgba(139,92,246,.4);
+  border-radius: 8px; color: #c084fc;
+  font-size: 11px; font-weight: 600;
+  padding: 6px 12px; cursor: pointer;
+  font-family: 'Google Sans', sans-serif;
+  transition: all .15s; white-space: nowrap;
+}
+.cd-copy-btn:hover { background: rgba(139,92,246,.35); }
+
+/* ── Status bar ── */
+.cd-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: 10px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: 12px; color: rgba(196,180,214,.7);
+}
+.cd-status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(196,180,214,.3); flex-shrink: 0;
+}
+.cd-status-dot.green  { background: #4ade80; box-shadow: 0 0 8px #4ade80; animation: cd-blink 2s infinite; }
+.cd-status-dot.yellow { background: #facc15; box-shadow: 0 0 8px #facc15; animation: cd-blink 1s infinite; }
+.cd-status-dot.red    { background: #f87171; }
+
+/* ── Cards de directores ── */
+.cd-directors-grid {
+  display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+  padding: 4px 0;
+}
+.cd-dir-card {
+  width: 120px;
+  background: linear-gradient(145deg, #1a1825, #2a2440, #1e1c2e);
+  border: 1px solid rgba(102,157,246,.2);
+  border-radius: 16px;
+  padding: 16px 10px 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  position: relative; overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  transition: transform .22s cubic-bezier(.34,1.56,.64,1), box-shadow .22s;
+}
+.cd-dir-card:hover {
+  transform: translateY(-5px) scale(1.03);
+  box-shadow: 0 16px 40px rgba(0,0,0,.6), 0 0 0 1px rgba(168,85,247,.3);
+}
+.cd-dir-card::before {
+  content:''; position:absolute; inset:0;
+  background: linear-gradient(125deg, transparent 30%, rgba(102,157,246,.06) 45%, rgba(168,85,247,.08) 55%, transparent 70%);
+  border-radius:16px; pointer-events:none; opacity:0; transition:opacity .3s;
+}
+.cd-dir-card:hover::before { opacity:1; }
+.cd-dir-card::after {
+  content:''; position:absolute; inset:0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.05) 2px, rgba(0,0,0,.05) 4px);
+  border-radius:16px; pointer-events:none;
+}
+.cdc-ring {
+  width: 62px; height: 62px; border-radius: 50%; padding: 2.5px;
+  background: conic-gradient(#7c3aed, #3b82f6, #10b981, #facc15, #7c3aed);
+  position: relative; z-index:1; flex-shrink:0;
+  animation: cd-spin 8s linear infinite;
+}
+@keyframes cd-spin { to { transform: rotate(360deg); } }
+.cdc-inner {
+  width:100%; height:100%; border-radius:50%;
+  background: #1a1825;
+  display:flex; align-items:center; justify-content:center;
+  font-size: 28px; border: 2px solid #1a1825;
+}
+.cdc-name {
+  font-family: 'Google Sans Display', sans-serif;
+  font-size: 11px; font-weight: 700; color: #e9d5ff;
+  text-align: center; position: relative; z-index:1;
+  max-width: 108px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  text-shadow: 0 0 12px rgba(102,157,246,.4);
+}
+.cdc-role {
+  font-size: 7.5px; color: rgba(102,157,246,.75);
+  font-family: 'Roboto Mono', monospace;
+  letter-spacing: .8px; text-transform: uppercase;
+  position:relative; z-index:1;
+}
+.cdc-badge {
+  font-size: 6.5px; font-weight: 700; letter-spacing: .8px;
+  padding: 2px 7px; border-radius: 4px;
+  position: relative; z-index:1;
+}
+.cdc-badge.host  { background: rgba(139,92,246,.2); border:1px solid rgba(139,92,246,.4); color:#c084fc; }
+.cdc-badge.guest { background: rgba(52,168,83,.15); border:1px solid rgba(52,168,83,.35); color:#4ade80; }
+.cdc-you { font-size: 7px; color: rgba(196,180,214,.4); position:relative; z-index:1; }
+
+/* ── Log ── */
+.cd-log {
+  background: rgba(0,0,0,.25);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 10px; padding: 10px 12px;
+  max-height: 80px; overflow-y: auto;
+  font-family: 'Roboto Mono', monospace;
+  font-size: 10px; color: rgba(196,180,214,.5);
+  line-height: 1.8;
+}
+
+/* ── Footer ── */
+.cd-footer {
+  padding: 16px 24px;
+  border-top: 1px solid rgba(255,255,255,.07);
+  display: flex; gap: 10px; justify-content: flex-end;
+}
+.cd-btn {
+  padding: 9px 20px; border-radius: 10px;
+  font-family: 'Google Sans', sans-serif;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all .15s; border: none;
+}
+.cd-btn.primary {
+  background: linear-gradient(135deg, #7c3aed, #5b21b6);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(124,58,237,.4);
+}
+.cd-btn.primary:hover { background: linear-gradient(135deg, #8b5cf6, #6d28d9); box-shadow: 0 6px 20px rgba(124,58,237,.5); }
+.cd-btn.secondary {
+  background: rgba(255,255,255,.07);
+  color: rgba(196,180,214,.8);
+  border: 1px solid rgba(255,255,255,.1);
+}
+.cd-btn.secondary:hover { background: rgba(255,255,255,.12); color: #e9d5ff; }
+.cd-btn.danger {
+  background: rgba(239,68,68,.12);
+  color: #f87171;
+  border: 1px solid rgba(239,68,68,.25);
+}
+.cd-btn.danger:hover { background: rgba(239,68,68,.22); }
+
+/* ── Cursores remotos ── */
+.cd-remote-cursor {
+  position: fixed; pointer-events: none; z-index: 9000;
+  transition: left .08s, top .08s;
+}
+.cd-cursor-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #a855f7;
+  box-shadow: 0 0 8px #a855f7;
+}
+.cd-cursor-label {
+  margin-top: 6px; margin-left: 4px;
+  background: rgba(139,92,246,.85);
+  color: #fff; font-size: 10px; font-weight: 600;
+  padding: 2px 7px; border-radius: 6px;
+  font-family: 'Google Sans', sans-serif;
+  white-space: nowrap;
+}
+
+/* ── Proyecto selector (solo host) ── */
+.cd-proj-list {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 160px; overflow-y: auto;
+}
+.cd-proj-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: 10px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  cursor: pointer; transition: all .15s;
+}
+.cd-proj-item:hover { background: rgba(139,92,246,.12); border-color: rgba(139,92,246,.3); }
+.cd-proj-item.selected { background: rgba(139,92,246,.18); border-color: #a855f7; }
+.cd-proj-icon { font-size: 18px; flex-shrink:0; }
+.cd-proj-info { flex:1; min-width:0; }
+.cd-proj-name { font-size:12.5px; font-weight:600; color:#e9d5ff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cd-proj-date { font-size:10px; color:rgba(196,180,214,.45); margin-top:2px; }
+.cd-proj-check { font-size:16px; color:#a855f7; }
+</style>
+
+<!-- ── Botón en topbar ── -->
+<script>
+(function injectCDButton() {
+  const topRight = document.querySelector('.topbar-right') || document.querySelector('#topbar > div:last-child');
+  if (!topRight) return;
+  const btn = document.createElement('button');
+  btn.className = 'cd-topbar-btn';
+  btn.id = 'cd-topbar-btn';
+  btn.onclick = () => CD.open();
+  btn.innerHTML = `<span>🎬</span><span>Co-Director</span><span class="cd-pulse" id="cd-pulse"></span>`;
+  topRight.prepend(btn);
+})();
+</script>
+
+<!-- ── Overlay HTML ── -->
+<div id="cd-overlay">
+  <div class="cd-shell">
+    <div class="cd-header">
+      <div class="cd-header-glow">🎬</div>
+      <div class="cd-header-text">
+        <h2>Co-Director</h2>
+        <p>Colaboración en tiempo real · Socket.io</p>
+      </div>
+      <button class="cd-header-close" onclick="CD.close()">✕</button>
+    </div>
+
+    <!-- PANE SETUP -->
+    <div id="cd-pane-setup">
+      <div class="cd-body">
+        <div class="cd-mode-row">
+          <div class="cd-mode-card active" id="cd-card-host" onclick="CD.selectMode('host')">
+            <div class="cd-mode-icon">👑</div>
+            <div class="cd-mode-title">Ser Host</div>
+            <div class="cd-mode-desc">Elegís el proyecto y compartís el código</div>
+          </div>
+          <div class="cd-mode-card" id="cd-card-join" onclick="CD.selectMode('join')">
+            <div class="cd-mode-icon">🔗</div>
+            <div class="cd-mode-title">Unirse</div>
+            <div class="cd-mode-desc">Ingresás el código que te pasó el host</div>
+          </div>
+        </div>
+
+        <div class="cd-field">
+          <div class="cd-label">Tu nombre</div>
+          <input class="cd-input" id="cd-my-name" placeholder="Ej: María, Equipo Rojo…" value="Director">
+        </div>
+
+        <!-- Solo host: elegir proyecto -->
+        <div id="cd-host-section">
+          <div class="cd-label" style="margin-bottom:8px;">Proyecto a compartir</div>
+          <div class="cd-proj-list" id="cd-proj-list">
+            <div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados</div>
+          </div>
+        </div>
+
+        <!-- Solo guest: ingresar código -->
+        <div id="cd-join-section" style="display:none;">
+          <div class="cd-field">
+            <div class="cd-label">Código de sesión</div>
+            <input class="cd-input" id="cd-join-code" placeholder="Ej: DRAGON42" maxlength="20" style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px;">
+          </div>
+        </div>
+
+        <div class="cd-status">
+          <div class="cd-status-dot" id="cd-status-dot"></div>
+          <span id="cd-status-text">Listo para conectar</span>
+        </div>
+      </div>
+      <div class="cd-footer">
+        <button class="cd-btn secondary" onclick="CD.close()">Cancelar</button>
+        <button class="cd-btn primary" id="cd-action-btn" onclick="CD.doAction()">✦ Crear sesión</button>
+      </div>
+    </div>
+
+    <!-- PANE CONECTADO -->
+    <div id="cd-pane-connected" style="display:none;">
+      <div class="cd-body">
+        <div>
+          <div class="cd-label" style="margin-bottom:12px;">Directores en sesión</div>
+          <div class="cd-directors-grid" id="cd-directors-grid"></div>
+        </div>
+
+        <div class="cd-code-box" id="cd-code-display" style="display:none;">
+          <div style="flex:1;">
+            <div style="font-size:10px;color:rgba(196,180,214,.5);margin-bottom:4px;font-family:'Roboto Mono';">CÓDIGO DE SESIÓN</div>
+            <div class="cd-code-val" id="cd-code-val">——</div>
+          </div>
+          <button class="cd-copy-btn" onclick="CD.copyCode()">📋 Copiar</button>
+        </div>
+
+        <div class="cd-status">
+          <div class="cd-status-dot green" id="cd-status-dot2"></div>
+          <span id="cd-status-text2">Sesión activa</span>
+        </div>
+
+        <div>
+          <div class="cd-label" style="margin-bottom:6px;">Actividad</div>
+          <div class="cd-log" id="cd-log"></div>
+        </div>
+      </div>
+      <div class="cd-footer">
+        <button class="cd-btn secondary" onclick="CD.close()">Cerrar</button>
+        <button class="cd-btn danger" onclick="CD.disconnect()">✕ Desconectar</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════
+   CO-DIRECTOR — Sistema Socket.io
+═══════════════════════════════════════════ */
+const CD = {
+  socket:      null,
+  connected:   false,
+  mode:        'host',   // 'host' | 'join'
+  myName:      'Director',
+  sessionCode: null,
+  isHost:      false,
+  selectedProjKey: null,   // solo host
+  _cursors:    {},          // { socketId: domEl }
+  _broadcasting: false,
+
+  /* ── Abrir modal ── */
+  open() {
+    this._populateProjects();
+    document.getElementById('cd-overlay').classList.add('open');
+  },
+  close() {
+    document.getElementById('cd-overlay').classList.remove('open');
+  },
+
+  /* ── Cargar proyectos guardados (solo host) ── */
+  _populateProjects() {
+    const list = document.getElementById('cd-proj-list');
+    const keys = Object.keys(localStorage).filter(k => k.startsWith('pm_'));
+    if (!keys.length) {
+      list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados aún</div>';
+      return;
+    }
+    list.innerHTML = keys.map(k => {
+      let name = 'Sin título', date = '';
+      try {
+        const d = JSON.parse(localStorage.getItem(k));
+        name = d.projectName || 'Sin título';
+        if (d.savedAt) date = new Date(d.savedAt).toLocaleDateString('es');
+      } catch {}
+      return `<div class="cd-proj-item" data-key="${k}" onclick="CD.selectProject('${k}')">
+        <div class="cd-proj-icon">🎮</div>
+        <div class="cd-proj-info">
+          <div class="cd-proj-name">${name}</div>
+          <div class="cd-proj-date">${date || k}</div>
+        </div>
+        <div class="cd-proj-check" id="cdpc-${k}" style="display:none;">✓</div>
+      </div>`;
+    }).join('');
+  },
+
+  selectProject(key) {
+    this.selectedProjKey = key;
+    document.querySelectorAll('.cd-proj-item').forEach(el => {
+      el.classList.toggle('selected', el.dataset.key === key);
+    });
+    document.querySelectorAll('.cd-proj-check').forEach(el => el.style.display = 'none');
+    const ck = document.getElementById(`cdpc-${key}`);
+    if (ck) ck.style.display = 'block';
+    this._setStatus('yellow', `Proyecto seleccionado ✓`);
+  },
+
+  selectMode(mode) {
+    this.mode = mode;
+    document.getElementById('cd-card-host').classList.toggle('active', mode === 'host');
+    document.getElementById('cd-card-join').classList.toggle('active', mode === 'join');
+    document.getElementById('cd-host-section').style.display = mode === 'host' ? 'block' : 'none';
+    document.getElementById('cd-join-section').style.display = mode === 'join' ? 'block' : 'none';
+    document.getElementById('cd-action-btn').textContent = mode === 'host' ? '✦ Crear sesión' : '🔗 Unirse';
+    this._setStatus('', 'Listo para conectar');
+  },
+
+  doAction() {
+    this.myName = (document.getElementById('cd-my-name').value || '').trim() || 'Director';
+    if (this.mode === 'host') this._createSession();
+    else this._joinSession();
+  },
+
+  /* ── Crear sesión (host) ── */
+  _createSession() {
+    if (!this.selectedProjKey) {
+      this._setStatus('yellow', 'Seleccioná un proyecto primero');
+      return;
+    }
+    this._setStatus('yellow', 'Conectando…');
+    this._connect(() => {
+      const code = this._genCode();
+      this.sessionCode = code;
+      this.isHost = true;
+      this.socket.emit('create-session', { code, name: this.myName });
+    });
+  },
+
+  /* ── Unirse (guest) ── */
+  _joinSession() {
+    const code = (document.getElementById('cd-join-code').value || '').trim().toUpperCase();
+    if (!code) { this._setStatus('yellow', 'Ingresá un código'); return; }
+    this._setStatus('yellow', 'Conectando…');
+    this._connect(() => {
+      this.sessionCode = code;
+      this.isHost = false;
+      this.socket.emit('join-session', { code, name: this.myName });
+    });
+  },
+
+  /* ── Conectar socket ── */
+  _connect(cb) {
+    if (this.socket) { this.socket.disconnect(); this.socket = null; }
+    this.socket = io();
+
+    this.socket.on('connect', () => { this._log('🔌 Conectado al servidor'); cb(); });
+    this.socket.on('connect_error', () => this._setStatus('red', 'Error de conexión'));
+
+    this.socket.on('session-created', ({ code, peers }) => {
+      this._onSessionReady(code, peers);
+      // Host envía el proyecto a todos cuando alguien se une
+    });
+
+    this.socket.on('session-joined', ({ code, peers }) => {
+      this._onSessionReady(code, peers);
+    });
+
+    this.socket.on('error-msg', msg => {
+      this._setStatus('red', msg);
+      this._log('❌ ' + msg);
+    });
+
+    this.socket.on('peers-updated', peers => {
+      this._renderDirectors(peers);
+      this._log(`👥 ${peers.length} director${peers.length !== 1 ? 'es' : ''} en sesión`);
+    });
+
+    // Recibir proyecto del host (solo guests)
+    this.socket.on('project-load', data => {
+      if (!this.isHost) {
+        loadFromKey.__cd_load(data);
+        this._log(`📂 Proyecto "${data.projectName}" recibido del host`);
+        toast('📂 Proyecto cargado desde el host');
+      }
+    });
+
+    // Recibir cambios en tiempo real
+    this.socket.on('project-update', data => {
+      if (!this.isHost) {
+        this._broadcasting = true;
+        this._applyUpdate(data);
+        this._broadcasting = false;
+      }
+    });
+
+    // Cursores remotos
+    this.socket.on('cursor-move', ({ id, name, x, y }) => {
+      this._updateCursor(id, name, x, y);
+    });
+
+    this.socket.on('disconnect', () => {
+      this._log('🔌 Desconectado del servidor');
+      if (this.connected) this._onDisconnect();
+    });
+  },
+
+  /* ── Sesión lista ── */
+  _onSessionReady(code, peers) {
+    this.connected = true;
+    this.sessionCode = code;
+
+    // Cambiar a pane conectado
+    document.getElementById('cd-pane-setup').style.display = 'none';
+    document.getElementById('cd-pane-connected').style.display = 'flex';
+    document.getElementById('cd-pane-connected').style.flexDirection = 'column';
+
+    // Mostrar código solo al host
+    const codeDisplay = document.getElementById('cd-code-display');
+    if (this.isHost) {
+      codeDisplay.style.display = 'flex';
+      document.getElementById('cd-code-val').textContent = code;
+    }
+
+    this._renderDirectors(peers);
+    this._setStatus2('green', 'Sesión activa');
+    this._log(`✅ Sesión ${this.isHost ? 'creada' : 'unida'}: ${code}`);
+    this._updateTopBtn(true);
+
+    // Host: enviar proyecto a la sala
+    if (this.isHost && this.selectedProjKey) {
+      const raw = localStorage.getItem(this.selectedProjKey);
+      if (raw) {
+        try {
+          const data = JSON.parse(raw);
+          this.socket.emit('project-load', data);
+          this._log(`📤 Proyecto "${data.projectName}" enviado`);
+        } catch {}
+      }
+    }
+
+    // Patch saveProject para sincronizar
+    this._patchSave();
+  },
+
+  /* ── Parchar saveProject para broadcast ── */
+  _patchSave() {
+    const orig = saveProject;
+    saveProject = () => {
+      orig();
+      if (this.connected && !this._broadcasting && this.isHost) {
+        const raw = localStorage.getItem('pm_project');
+        if (raw) {
+          try { this.socket.emit('project-update', JSON.parse(raw)); } catch {}
+        }
+      }
+    };
+  },
+
+  /* ── Aplicar update recibido ── */
+  _applyUpdate(data) {
+    try {
+      // Actualizar objetos en el canvas sin recargar todo
+      if (data.objects) {
+        STATE.objects = data.objects;
+        const wc = document.getElementById('world-canvas');
+        if (wc) { wc.innerHTML = ''; data.objects.forEach(o => { renderWorldObj(o); _applyObjImgUrl(o); }); }
+      }
+      if (data.layers)     { STATE.layers = data.layers; renderLayers(); }
+      if (data.actors)     { STATE.actors = data.actors; renderActorLib(); }
+      if (data.rules)      { RULES.length=0; data.rules.forEach(r=>RULES.push(r)); }
+      if (data.relations)  { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
+      renderSceneTree();
+      updateStatusBar();
+    } catch(e) { console.warn('CD update error:', e); }
+  },
+
+  /* ── Desconectar ── */
+  disconnect() {
+    if (this.socket) { this.socket.disconnect(); this.socket = null; }
+    this._onDisconnect();
+    this.close();
+  },
+
+  _onDisconnect() {
+    this.connected = false;
+    this.isHost = false;
+    this.sessionCode = null;
+    this._clearCursors();
+    this._updateTopBtn(false);
+    // Resetear overlay a setup
+    document.getElementById('cd-pane-setup').style.display = 'block';
+    document.getElementById('cd-pane-connected').style.display = 'none';
+    this._setStatus('', 'Desconectado');
+    toast('👥 Co-Director desconectado');
+  },
+
+  /* ── Cursores remotos ── */
+  _updateCursor(id, name, x, y) {
+    if (!this._cursors[id]) {
+      const el = document.createElement('div');
+      el.className = 'cd-remote-cursor';
+      el.innerHTML = `<div class="cd-cursor-dot"></div><div class="cd-cursor-label">${name}</div>`;
+      document.body.appendChild(el);
+      this._cursors[id] = el;
+    }
+    this._cursors[id].style.left = x + 'px';
+    this._cursors[id].style.top  = y + 'px';
+  },
+  _clearCursors() {
+    Object.values(this._cursors).forEach(el => el.remove());
+    this._cursors = {};
+  },
+
+  /* ── Render cards directores ── */
+  _renderDirectors(peers) {
+    const grid = document.getElementById('cd-directors-grid');
+    if (!grid) return;
+    const myId = this.socket?.id;
+    grid.innerHTML = peers.map(p => `
+      <div class="cd-dir-card">
+        <div class="cdc-ring"><div class="cdc-inner">${this._avatar(p.name)}</div></div>
+        <div class="cdc-name">${p.name}</div>
+        <div class="cdc-role">${p.role}</div>
+        <div class="cdc-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
+        ${p.id === myId ? '<div class="cdc-you">● Tú</div>' : ''}
+      </div>`).join('');
+  },
+
+  _avatar(name) {
+    const emojis = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
+    return emojis[name.charCodeAt(0) % emojis.length];
+  },
+
+  /* ── Helpers UI ── */
+  _setStatus(type, msg) {
+    const dot  = document.getElementById('cd-status-dot');
+    const text = document.getElementById('cd-status-text');
+    if (dot)  { dot.className = 'cd-status-dot' + (type ? ' ' + type : ''); }
+    if (text) text.textContent = msg;
+  },
+  _setStatus2(type, msg) {
+    const dot  = document.getElementById('cd-status-dot2');
+    const text = document.getElementById('cd-status-text2');
+    if (dot)  { dot.className = 'cd-status-dot' + (type ? ' ' + type : ''); }
+    if (text) text.textContent = msg;
+  },
+  _log(msg) {
+    const log = document.getElementById('cd-log');
+    if (!log) return;
+    const line = document.createElement('div');
+    line.textContent = new Date().toLocaleTimeString('es', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) + ' · ' + msg;
+    log.prepend(line);
+  },
+  _updateTopBtn(live) {
+    const btn = document.getElementById('cd-topbar-btn');
+    if (!btn) return;
+    btn.className = 'cd-topbar-btn' + (live ? ' live' : '');
+    btn.querySelector('.cd-pulse').style.background = live ? '#4ade80' : '#a855f7';
+  },
+  copyCode() {
+    navigator.clipboard.writeText(this.sessionCode || '').catch(()=>{});
+    toast('📋 Código copiado: ' + this.sessionCode);
+  },
+  _genCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    return Array.from({length:6}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
+  },
+};
+
+/* ── Patch loadFromKey para que el host pueda cargar datos recibidos ── */
+loadFromKey.__cd_load = function(data) {
+  try {
+    document.getElementById('proj-name-badge').textContent = data.projectName || 'Sin título';
+    STATE.layers      = data.layers      || STATE.layers;
+    STATE.activeLayer = data.activeLayer || STATE.activeLayer;
+    const wc = document.getElementById('world-canvas');
+    if (wc) {
+      wc.innerHTML = '';
+      if (data.worldW && data.worldH) {
+        wc.style.width  = data.worldW + 'px';
+        wc.style.height = data.worldH + 'px';
+        setTimeout(() => { if(typeof _fitWorldToView==='function') _fitWorldToView(data.worldW, data.worldH); }, 80);
+      }
+    }
+    STATE.objects = [];
+    if (typeof _restoreAssets === 'function') _restoreAssets(data);
+    for (const o of (data.objects||[])) {
+      STATE.objects.push(o);
+      if(typeof renderWorldObj==='function') renderWorldObj(o);
+      if(typeof _applyObjImgUrl==='function') _applyObjImgUrl(o);
+    }
+    if (data.actors)    { STATE.actors = data.actors; if(typeof renderActorLib==='function') renderActorLib(); }
+    if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
+    if (data.relations) { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
+    if(typeof renderSceneTree==='function') renderSceneTree();
+    if(typeof renderLayers==='function')    renderLayers();
+    if(typeof updateStatusBar==='function') updateStatusBar();
+  } catch(e) { console.error('CD load error:', e); }
+};
+
+/* ── Enviar cursor al mover el mouse ── */
+document.addEventListener('mousemove', e => {
+  if (!CD.connected || !CD.socket) return;
+  CD.socket.emit('cursor-move', { name: CD.myName, x: e.clientX, y: e.clientY });
+});
+
+/* ── Init ── */
+document.addEventListener('DOMContentLoaded', () => {
+  addLog('info', '🎬 Co-Director listo · Hacé clic en el botón "Co-Director" para colaborar.');
+});
+</script>
