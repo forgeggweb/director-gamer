@@ -20851,11 +20851,12 @@ window.openWelcome = function() {
 <script>
 /* ══════════════════════════════════════════════════════════
    LOGIN SYSTEM — Clave de sesión persistente
-   Genera window._CD_userId = hash(username + pin)
+   Genera window._CD_userId = hash(username + pin + deviceId)
    Aísla: perfiles localStorage, proyectos en servidor
 ══════════════════════════════════════════════════════════ */
 (function() {
   const SESSION_KEY = 'dg_session_v1';
+  const DEVICE_KEY  = 'dg_device_id';
 
   /* ── Simple hash djb2 → hex string ── */
   function _hash(str) {
@@ -20864,9 +20865,29 @@ window.openWelcome = function() {
     return Math.abs(h).toString(16).padStart(8, '0');
   }
 
-  /* ── Genera un userId estable a partir de nombre + PIN ── */
+  /* ── ID de dispositivo: único por navegador, persiste en localStorage ── */
+  function _getOrCreateDeviceId() {
+    try {
+      let did = localStorage.getItem(DEVICE_KEY);
+      if (!did) {
+        // Generar ID aleatorio robusto
+        const arr = new Uint8Array(12);
+        crypto.getRandomValues(arr);
+        did = 'dev_' + Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
+        localStorage.setItem(DEVICE_KEY, did);
+      }
+      return did;
+    } catch(e) {
+      // Fallback si localStorage falla
+      return 'dev_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    }
+  }
+
+  /* ── Genera un userId estable a partir de nombre + PIN + deviceId ── */
+  /* El deviceId garantiza que dos usuarios con mismo nombre/PIN no colisionan */
   function _makeUserId(username, pin) {
-    return 'u_' + _hash(username.trim().toLowerCase() + ':' + pin);
+    const deviceId = _getOrCreateDeviceId();
+    return 'u_' + _hash(username.trim().toLowerCase() + ':' + pin + ':' + deviceId);
   }
 
   /* ── Prefijos de localStorage aislados por usuario ── */
@@ -20889,6 +20910,7 @@ window.openWelcome = function() {
     window._DG_PSO_ACTIVE_KEY   = activeKey;
 
     // Guardar sesión en localStorage para recordar al usuario
+    // Guardamos el uid (que ya incluye deviceId) para restaurarlo sin re-hashear
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify({ username: username.trim(), uid, savedAt: Date.now() }));
     } catch(e) {}
@@ -20897,10 +20919,18 @@ window.openWelcome = function() {
   }
 
   /* ── Intentar restaurar sesión guardada ── */
+  /* Usa el uid guardado directamente (ya incluye deviceId del dispositivo) */
   function _tryRestoreSession() {
     try {
       const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
-      if (s && s.uid && s.username) return s;
+      if (s && s.uid && s.username) {
+        // Restaurar keys de namespace sin re-generar el uid
+        window._CD_userId          = s.uid;
+        window._DG_USERNAME        = s.username;
+        window._DG_PSO_PROFILES_KEY = _profilesKey(s.uid);
+        window._DG_PSO_ACTIVE_KEY   = _activeKey(s.uid);
+        return s;
+      }
     } catch(e) {}
     return null;
   }
@@ -21017,12 +21047,19 @@ function dglSubmit() {
   // Activar sesión → genera _CD_userId único para este usuario
   const uid = DGL._activateSession(username, pin);
 
-  // Redirigir localStorage de perfiles al namespace del usuario
-  // Patcheamos psoLoadProfiles y psoSaveProfiles para usar claves del usuario
+  // Aplicar namespace de perfiles para este usuario
+  _applyProfileNamespace(uid);
+
+  // Cerrar login y abrir selector de perfil
+  DGL.close();
+  openProfileSelector();
+}
+
+/* ── Aplicar namespace de perfiles para un uid dado ── */
+/* Se llama tanto en login nuevo como en restauración de sesión */
+function _applyProfileNamespace(uid) {
   const profKey   = DGL._profilesKey(uid);
   const activeKey = DGL._activeKey(uid);
-
-  // Override de las funciones de perfil con las claves del usuario
   window.psoLoadProfiles = function() {
     try { _psoProfiles = JSON.parse(localStorage.getItem(profKey)) || []; } catch(e) { _psoProfiles = []; }
   };
@@ -21039,10 +21076,6 @@ function dglSubmit() {
       if (typeof dpSave === 'function') dpSave();
     }
   };
-
-  // Cerrar login y abrir selector de perfil
-  DGL.close();
-  openProfileSelector();
 }
 
 /* ── Iniciar: mostrar login antes que cualquier otra cosa ── */
@@ -21068,6 +21101,13 @@ document.addEventListener('DOMContentLoaded', function() {
     _origOpenProfileSelector();
   };
 
+  // Si hay sesión guardada restaurada, aplicar el namespace de perfiles ANTES de abrir la app
+  // (DGL._tryRestoreSession ya fue llamado internamente y seteó _CD_userId, _DG_PSO_PROFILES_KEY, etc.)
+  const _savedSession = DGL._tryRestoreSession();
+  if (_savedSession && _savedSession.uid) {
+    _applyProfileNamespace(_savedSession.uid);
+  }
+
   // Mostrar el login
   DGL.open();
 });
@@ -21081,8 +21121,35 @@ document.addEventListener('DOMContentLoaded', function() {
      Diseño nuevo · Host elige el proyecto
 ═══════════════════════════════════════════════════════ -->
 
-<!-- Socket.io client desde el servidor -->
-<script src="/socket.io/socket.io.js"></script>
+<!-- Socket.io: carga desde el servidor (Render), con fallback a CDN -->
+<script>
+(function() {
+  if (typeof io !== 'undefined') return; // ya cargado
+
+  function tryLoad(srcs, idx) {
+    if (idx >= srcs.length) {
+      console.warn('[Co-Director] socket.io no disponible. Verificá que el servidor esté corriendo.');
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = srcs[idx];
+    s.onload = function() {
+      if (typeof io !== 'undefined') {
+        console.log('[Co-Director] socket.io cargado desde:', srcs[idx]);
+      } else {
+        tryLoad(srcs, idx + 1);
+      }
+    };
+    s.onerror = function() { tryLoad(srcs, idx + 1); };
+    document.head.appendChild(s);
+  }
+
+  tryLoad([
+    '/socket.io/socket.io.js',                        // servidor propio (Render/local)
+    'https://cdn.socket.io/4.7.5/socket.io.min.js'   // CDN fallback
+  ], 0);
+})();
+</script>
 
 <style>
 /* ── Botón topbar ── */
@@ -21729,13 +21796,28 @@ const CD = {
   _connect(cb) {
     if (this.socket) { this.socket.disconnect(); this.socket = null; }
 
-    // Verificar que socket.io esté disponible
+    // Si socket.io todavía no terminó de cargar (carga asíncrona), esperar hasta 5s
     if (typeof io === 'undefined') {
-      this._setStatus('red', 'Socket.io no disponible — ¿el servidor está corriendo?');
-      this._log('❌ socket.io no cargado. Servir el HTML desde el servidor Node.js.');
+      this._setStatus('yellow', 'Cargando socket.io…');
+      let attempts = 0;
+      const wait = setInterval(() => {
+        attempts++;
+        if (typeof io !== 'undefined') {
+          clearInterval(wait);
+          this._doConnect(cb);
+        } else if (attempts >= 50) { // 50 × 100ms = 5s
+          clearInterval(wait);
+          this._setStatus('red', 'socket.io no disponible — verificá que el servidor esté corriendo');
+          this._log('❌ socket.io no cargó tras 5 segundos.');
+        }
+      }, 100);
       return;
     }
 
+    this._doConnect(cb);
+  },
+
+  _doConnect(cb) {
     // Conectar al servidor. Si hay URL configurada (window._DG_SERVER_URL), usarla.
     const serverUrl = window._DG_SERVER_URL || undefined;
     try {
@@ -22250,15 +22332,18 @@ const CD = {
     this._cursors = {};
   },
 
-  /* ── Obtener perfil activo (SOLO lectura, no modifica nada del host) ── */
+  /* ── Obtener perfil activo — usa las claves del usuario activo ── */
   _getProfile() {
     try {
-      const list = JSON.parse(localStorage.getItem('dg_profiles_list') || '[]');
-      const idx  = parseInt(localStorage.getItem('dg_active_profile')  || '0');
+      // Usar las claves redirigidas al namespace del usuario (seteadas en dglSubmit)
+      const profKey   = window._DG_PSO_PROFILES_KEY || 'dg_profiles_list';
+      const activeKey = window._DG_PSO_ACTIVE_KEY   || 'dg_active_profile';
+      const list = JSON.parse(localStorage.getItem(profKey) || '[]');
+      const idx  = parseInt(localStorage.getItem(activeKey) || '0');
       // Devuelve solo datos de UI — sin datos de proyecto
       const p = list[idx] || {};
       return {
-        name:         p.name         || 'Director',
+        name:         p.name         || this.myName || 'Director',
         title:        p.title        || '',
         avatarType:   p.avatarType   || 'emoji',
         avatarEmoji:  p.avatarEmoji  || '🎮',
@@ -22266,7 +22351,7 @@ const CD = {
         photoDataUrl: p.photoDataUrl || null,
         cardTheme:    p.cardTheme    || 1,
       };
-    } catch { return { name: 'Director', cardTheme: 1 }; }
+    } catch { return { name: this.myName || 'Director', cardTheme: 1 }; }
   },
 
   /* ── Helpers UI ── */
