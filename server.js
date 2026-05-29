@@ -33,7 +33,7 @@ function saveProjectsDB(db) {
   } catch (e) { console.error('Error guardando projects.json:', e.message); }
 }
 
-// db estructura: { [userId]: { [projectId]: { id, name, data, savedAt } } }
+// db estructura: { [userId]: { [projectId]: { id, projectName, data, savedAt } } }
 let projectsDB = loadProjectsDB();
 
 // ── Rooms ─────────────────────────────────────────────────────────────────────
@@ -44,48 +44,59 @@ io.on('connection', (socket) => {
 
   // ── Sesiones ──────────────────────────────────────────────────────────────
 
-  socket.on('create-session', ({ code, name }) => {
-    rooms[code] = { host: socket.id, peers: [{ id: socket.id, name, role: 'Host' }] };
+  socket.on('create-session', ({ code, name, profile }) => {
+    rooms[code] = {
+      host: socket.id,
+      peers: [{ id: socket.id, name, role: 'Host', profile: profile || null }]
+    };
     socket.join(code);
     socket.sessionCode = code;
     socket.emit('session-created', { code, peers: rooms[code].peers });
     console.log(`🎬 Sesión creada: ${code} por ${name}`);
   });
 
-  socket.on('join-session', ({ code, name }) => {
+  socket.on('join-session', ({ code, name, profile }) => {
     if (!rooms[code]) { socket.emit('error-msg', 'Sesión no encontrada.'); return; }
-    const peer = { id: socket.id, name, role: 'Co-Director' };
+    const peer = { id: socket.id, name, role: 'Co-Director', profile: profile || null };
     rooms[code].peers.push(peer);
     socket.join(code);
     socket.sessionCode = code;
+    // Primero notificar a todos que hay un nuevo peer
     io.to(code).emit('peers-updated', rooms[code].peers);
+    // Luego confirmar al que se unió (incluye la lista completa de peers)
     socket.emit('session-joined', { code, peers: rooms[code].peers });
     console.log(`👥 ${name} se unió a: ${code}`);
   });
 
   // ── Perfil de peer ─────────────────────────────────────────────────────────
-  // Cliente envía: { profile: { avatar, color, … } }
-  // Server actualiza el peer en rooms y hace broadcast al room
-  socket.on('peer-profile', (profile) => {
-    const code = socket.sessionCode;
+  // FIX: el cliente envía { sessionCode, profile, name } — desestructurar correctamente
+  socket.on('peer-profile', ({ sessionCode, profile, name }) => {
+    const code = sessionCode || socket.sessionCode;
     if (!code || !rooms[code]) return;
     const peer = rooms[code].peers.find(p => p.id === socket.id);
-    if (peer) Object.assign(peer, { profile });
-    io.to(code).emit('peer-profile', { id: socket.id, profile });
-    console.log(`👤 Perfil actualizado: ${socket.id}`);
+    if (peer) {
+      if (profile) peer.profile = profile;
+      if (name)    peer.name    = name;
+    }
+    // Reenviar solo a los demás (fromId para que el cliente ignore el eco propio)
+    socket.to(code).emit('peer-profile', { fromId: socket.id, profile, name });
+    console.log(`👤 Perfil actualizado: ${socket.id} (${name || ''})`);
   });
 
-  // ── Proyecto: relay host → guests ──────────────────────────────────────────
+  // ── Proyecto: relay ────────────────────────────────────────────────────────
 
   socket.on('project-load', (data) => {
     const code = socket.sessionCode;
     if (!code) return;
+    // Solo el host puede enviar project-load
+    if (rooms[code]?.host !== socket.id) return;
     socket.to(code).emit('project-load', data);
   });
 
   socket.on('project-update', (data) => {
     const code = socket.sessionCode;
     if (!code) return;
+    // Relay a todos menos el emisor (socket.to ya excluye al emisor)
     socket.to(code).emit('project-update', data);
   });
 
@@ -97,82 +108,63 @@ io.on('connection', (socket) => {
 
   // ── Proyectos en servidor ──────────────────────────────────────────────────
   // Todos los eventos reciben { reqId, userId, … } y responden con
-  // socket.emit('srv-response', { reqId, ok, data })
+  // socket.emit('srv-response', { reqId, ok, data, error })
 
-  // Guardar proyecto
-  // Payload: { reqId, userId, projectId?, data }
-  // data.projectName se usa como nombre visible
+  // FIX: error se manda en el campo "error", no dentro de "data"
+  function srvOk(reqId, data)    { socket.emit('srv-response', { reqId, ok: true,  data }); }
+  function srvErr(reqId, msg)    { socket.emit('srv-response', { reqId, ok: false, error: msg }); }
+
   socket.on('srv-save', ({ reqId, userId, projectId, name, data }) => {
     try {
       if (!userId) throw new Error('userId requerido');
       if (!projectsDB[userId]) projectsDB[userId] = {};
-      // El cliente manda el nombre dentro de data.projectName
       const projectName = (data && data.projectName) || name || 'Sin título';
-      // Buscar proyecto existente por nombre para sobrescribir en vez de duplicar
-      const existingId = projectId || Object.keys(projectsDB[userId] || {})
+      const existingId = projectId || Object.keys(projectsDB[userId])
         .find(k => projectsDB[userId][k].projectName === projectName);
       const id = existingId || `proj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const savedAt = new Date().toISOString();
       projectsDB[userId][id] = { id, projectName, data, savedAt };
       saveProjectsDB(projectsDB);
-      socket.emit('srv-response', { reqId, ok: true, data: { id, savedAt } });
-      console.log(`💾 Proyecto guardado: "${projectName}" id=${id} (user: ${userId})`);
-    } catch (e) {
-      socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
-    }
+      srvOk(reqId, { id, savedAt });
+      console.log(`💾 Guardado: "${projectName}" id=${id} (user: ${userId})`);
+    } catch (e) { srvErr(reqId, e.message); }
   });
 
-  // Listar proyectos del usuario
-  // Payload: { reqId, userId }
-  // Responde con el ARRAY directamente (el cliente hace projects.length)
   socket.on('srv-list', ({ reqId, userId }) => {
     try {
       if (!userId) throw new Error('userId requerido');
-      const userProjects = projectsDB[userId] || {};
-      const list = Object.values(userProjects)
-        .map(({ id, projectName, savedAt }) => ({ id, projectName, savedAt }));
-      list.sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
-      // El cliente espera el array directamente, no envuelto en { projects: [...] }
-      socket.emit('srv-response', { reqId, ok: true, data: list });
-    } catch (e) {
-      socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
-    }
+      const list = Object.values(projectsDB[userId] || {})
+        .map(({ id, projectName, savedAt }) => ({ id, projectName, savedAt }))
+        .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
+      srvOk(reqId, list);
+    } catch (e) { srvErr(reqId, e.message); }
   });
 
-  // Cargar proyecto por ID
-  // Payload: { reqId, userId, id }   (el cliente manda "id", no "projectId")
   socket.on('srv-load', ({ reqId, userId, id, projectId }) => {
     try {
       const pid = id || projectId;
       if (!userId || !pid) throw new Error('userId y id requeridos');
       const entry = projectsDB[userId]?.[pid];
       if (!entry) throw new Error('Proyecto no encontrado');
-      // El cliente usa data.projectName, data.objects, etc. directamente
-      socket.emit('srv-response', { reqId, ok: true, data: entry.data });
-      console.log(`📂 Proyecto cargado: ${pid} (user: ${userId})`);
-    } catch (e) {
-      socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
-    }
+      srvOk(reqId, entry.data);
+      console.log(`📂 Cargado: ${pid} (user: ${userId})`);
+    } catch (e) { srvErr(reqId, e.message); }
   });
 
-  // Borrar proyectos
-  // Payload: { reqId, userId, projectId? }  — sin projectId borra todos
   socket.on('srv-clear', ({ reqId, userId, projectId }) => {
     try {
       if (!userId) throw new Error('userId requerido');
       if (projectId) {
         if (!projectsDB[userId]?.[projectId]) throw new Error('Proyecto no encontrado');
         delete projectsDB[userId][projectId];
-        console.log(`🗑 Proyecto borrado: ${projectId} (user: ${userId})`);
+        console.log(`🗑 Borrado: ${projectId} (user: ${userId})`);
       } else {
         delete projectsDB[userId];
-        console.log(`🗑 Todos los proyectos borrados (user: ${userId})`);
+        console.log(`🗑 Todos borrados (user: ${userId})`);
       }
       saveProjectsDB(projectsDB);
-      socket.emit('srv-response', { reqId, ok: true, data: { cleared: projectId || 'all' } });
-    } catch (e) {
-      socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
-    }
+      srvOk(reqId, { cleared: projectId || 'all' });
+    } catch (e) { srvErr(reqId, e.message); }
   });
 
   // ── Desconexión ────────────────────────────────────────────────────────────
@@ -181,8 +173,12 @@ io.on('connection', (socket) => {
     const code = socket.sessionCode;
     if (!code || !rooms[code]) return;
     rooms[code].peers = rooms[code].peers.filter(p => p.id !== socket.id);
-    if (rooms[code].peers.length === 0) { delete rooms[code]; console.log(`🗑 Sesión cerrada: ${code}`); }
-    else io.to(code).emit('peers-updated', rooms[code].peers);
+    if (rooms[code].peers.length === 0) {
+      delete rooms[code];
+      console.log(`🗑 Sesión cerrada: ${code}`);
+    } else {
+      io.to(code).emit('peers-updated', rooms[code].peers);
+    }
     console.log('❌ Desconectado:', socket.id);
   });
 });
