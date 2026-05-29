@@ -15959,9 +15959,19 @@ function stopAutosave() {
 }
 
 function _buildSaveData() {
+  // Enriquecer objetos con imgUrl desde su asset si no la tienen directamente
+  // (necesario para tiles colocados desde el tilemap que solo tienen assetId)
+  const enrichedObjects = (STATE.objects || []).map(o => {
+    if (!o.imgUrl && o.assetId && typeof ASSETS !== 'undefined') {
+      const asset = ASSETS.find(a => a.id === o.assetId);
+      if (asset && asset.url) return { ...o, imgUrl: asset.url };
+    }
+    return o;
+  });
+
   return {
     projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
-    objects:     STATE.objects,
+    objects:     enrichedObjects,
     layers:      STATE.layers,
     activeLayer: STATE.activeLayer,
     actors:      STATE.actors,
@@ -16112,18 +16122,19 @@ function _applyProjectData(data, _fromCD) {
       STATE.objects.push(o);
       if (typeof renderWorldObj === 'function') renderWorldObj(o);
     }
-    // Aplicar texturas en el siguiente frame para garantizar que el DOM existe
-    requestAnimationFrame(() => {
-      for (const o of (data.objects || [])) {
-        if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
-      }
-    });
     if (data.actors)    { STATE.actors = data.actors;        if(typeof renderActorLib  ==='function') renderActorLib(); }
     if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
     if (data.relations) { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
     if (typeof renderSceneTree === 'function') renderSceneTree();
     if (typeof renderLayers    === 'function') renderLayers();
     if (typeof updateStatusBar === 'function') updateStatusBar();
+    // Aplicar texturas DESPUÉS de todos los renders para evitar que
+    // re-renders posteriores borren las imágenes ya aplicadas.
+    requestAnimationFrame(() => {
+      for (const o of (data.objects || [])) {
+        if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
+      }
+    });
     // No limpiar historial cuando viene de Co-Director (evita side-effects en _updateUI)
     if (!_fromCD && typeof CommandHistory !== 'undefined') CommandHistory.clear();
   } catch(e) { console.error('_applyProjectData error:', e); }
@@ -21124,6 +21135,23 @@ window.openWelcome = function() {
 </div>
 
 <script>
+/* ═══════════════════════════════════════════════════════════
+   USER ID — Identificador único y persistente por navegador.
+   Evita que todos compartan el namespace "anon" en el servidor.
+═══════════════════════════════════════════════════════════ */
+(function() {
+  const KEY = 'dg_user_id';
+  let uid = null;
+  try { uid = localStorage.getItem(KEY); } catch(e) {}
+  if (!uid) {
+    // Generar un ID único de 16 chars alfanuméricos
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    uid = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    try { localStorage.setItem(KEY, uid); } catch(e) {}
+  }
+  window._CD_userId = uid;
+})();
+
 /* ═══════════════════════════════════════════════════════════
    _SRV — Capa de servidor (Socket.io)
    Expone: saveProject, loadProject, listProjects, clearProjects
