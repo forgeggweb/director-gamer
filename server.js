@@ -100,16 +100,23 @@ io.on('connection', (socket) => {
   // socket.emit('srv-response', { reqId, ok, data })
 
   // Guardar proyecto
-  // Payload: { reqId, userId, projectId?, name, data }
+  // Payload: { reqId, userId, projectId?, data }
+  // data.projectName se usa como nombre visible
   socket.on('srv-save', ({ reqId, userId, projectId, name, data }) => {
     try {
       if (!userId) throw new Error('userId requerido');
       if (!projectsDB[userId]) projectsDB[userId] = {};
-      const id = projectId || `proj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      projectsDB[userId][id] = { id, name: name || 'Sin título', data, savedAt: new Date().toISOString() };
+      // El cliente manda el nombre dentro de data.projectName
+      const projectName = (data && data.projectName) || name || 'Sin título';
+      // Buscar proyecto existente por nombre para sobrescribir en vez de duplicar
+      const existingId = projectId || Object.keys(projectsDB[userId] || {})
+        .find(k => projectsDB[userId][k].projectName === projectName);
+      const id = existingId || `proj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const savedAt = new Date().toISOString();
+      projectsDB[userId][id] = { id, projectName, data, savedAt };
       saveProjectsDB(projectsDB);
-      socket.emit('srv-response', { reqId, ok: true, data: { id, savedAt: projectsDB[userId][id].savedAt } });
-      console.log(`💾 Proyecto guardado: ${id} (user: ${userId})`);
+      socket.emit('srv-response', { reqId, ok: true, data: { id, savedAt } });
+      console.log(`💾 Proyecto guardado: "${projectName}" id=${id} (user: ${userId})`);
     } catch (e) {
       socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
     }
@@ -117,27 +124,32 @@ io.on('connection', (socket) => {
 
   // Listar proyectos del usuario
   // Payload: { reqId, userId }
+  // Responde con el ARRAY directamente (el cliente hace projects.length)
   socket.on('srv-list', ({ reqId, userId }) => {
     try {
       if (!userId) throw new Error('userId requerido');
       const userProjects = projectsDB[userId] || {};
-      const list = Object.values(userProjects).map(({ id, name, savedAt }) => ({ id, name, savedAt }));
+      const list = Object.values(userProjects)
+        .map(({ id, projectName, savedAt }) => ({ id, projectName, savedAt }));
       list.sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
-      socket.emit('srv-response', { reqId, ok: true, data: { projects: list } });
+      // El cliente espera el array directamente, no envuelto en { projects: [...] }
+      socket.emit('srv-response', { reqId, ok: true, data: list });
     } catch (e) {
       socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
     }
   });
 
   // Cargar proyecto por ID
-  // Payload: { reqId, userId, projectId }
-  socket.on('srv-load', ({ reqId, userId, projectId }) => {
+  // Payload: { reqId, userId, id }   (el cliente manda "id", no "projectId")
+  socket.on('srv-load', ({ reqId, userId, id, projectId }) => {
     try {
-      if (!userId || !projectId) throw new Error('userId y projectId requeridos');
-      const project = projectsDB[userId]?.[projectId];
-      if (!project) throw new Error('Proyecto no encontrado');
-      socket.emit('srv-response', { reqId, ok: true, data: { project } });
-      console.log(`📂 Proyecto cargado: ${projectId} (user: ${userId})`);
+      const pid = id || projectId;
+      if (!userId || !pid) throw new Error('userId y id requeridos');
+      const entry = projectsDB[userId]?.[pid];
+      if (!entry) throw new Error('Proyecto no encontrado');
+      // El cliente usa data.projectName, data.objects, etc. directamente
+      socket.emit('srv-response', { reqId, ok: true, data: entry.data });
+      console.log(`📂 Proyecto cargado: ${pid} (user: ${userId})`);
     } catch (e) {
       socket.emit('srv-response', { reqId, ok: false, data: { error: e.message } });
     }
