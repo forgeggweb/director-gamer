@@ -16088,7 +16088,7 @@ function loadFromServer(id) {
 }
 
 // Función unificada de aplicar datos de proyecto
-function _applyProjectData(data) {
+function _applyProjectData(data, _fromCD) {
   try {
     if (data.projectName) document.getElementById('proj-name-badge').textContent = data.projectName;
     STATE.layers      = data.layers      || STATE.layers;
@@ -16110,16 +16110,22 @@ function _applyProjectData(data) {
     if (typeof _restoreAssets === 'function') _restoreAssets(data);
     for (const o of (data.objects || [])) {
       STATE.objects.push(o);
-      if (typeof renderWorldObj    === 'function') renderWorldObj(o);
-      if (typeof _applyObjImgUrl   === 'function') _applyObjImgUrl(o);
+      if (typeof renderWorldObj === 'function') renderWorldObj(o);
     }
+    // Aplicar texturas en el siguiente frame para garantizar que el DOM existe
+    requestAnimationFrame(() => {
+      for (const o of (data.objects || [])) {
+        if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
+      }
+    });
     if (data.actors)    { STATE.actors = data.actors;        if(typeof renderActorLib  ==='function') renderActorLib(); }
     if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
     if (data.relations) { RELATIONS.length=0; data.relations.forEach(r=>RELATIONS.push(r)); }
     if (typeof renderSceneTree === 'function') renderSceneTree();
     if (typeof renderLayers    === 'function') renderLayers();
     if (typeof updateStatusBar === 'function') updateStatusBar();
-    if (typeof CommandHistory  !== 'undefined') CommandHistory.clear();
+    // No limpiar historial cuando viene de Co-Director (evita side-effects en _updateUI)
+    if (!_fromCD && typeof CommandHistory !== 'undefined') CommandHistory.clear();
   } catch(e) { console.error('_applyProjectData error:', e); }
 }
 
@@ -21357,7 +21363,7 @@ const CD = {
     // Recibir proyecto (solo guests)
     this.socket.on('project-load', data => {
       if (!this.isHost) {
-        _applyProjectData(data);
+        _applyProjectData(data, true);
         this._log(`📂 Proyecto "${data.projectName}" recibido del host`);
         toast('📂 Proyecto cargado desde el host');
       }
@@ -21366,8 +21372,9 @@ const CD = {
     // Recibir cambios en tiempo real
     this.socket.on('project-update', data => {
       this._broadcasting = true;
-      _applyProjectData(data);
-      this._broadcasting = false;
+      _applyProjectData(data, true);
+      // Reset después del rAF de _applyProjectData para no re-emitir el propio update
+      requestAnimationFrame(() => { this._broadcasting = false; });
     });
 
     // Cursores remotos
@@ -21403,7 +21410,7 @@ const CD = {
     if (this.isHost && this.selectedProjId) {
       window._SRV.loadProject(this.selectedProjId).then(data => {
         if (!data) return;
-        _applyProjectData(data);
+        _applyProjectData(data, true);
         this.socket.emit('project-load', data);
         this._log(`📤 Proyecto "${data.projectName}" enviado a la sala`);
       });
@@ -21787,6 +21794,8 @@ const CD = {
 
   /* ── Cursores remotos ── */
   _updateCursor(id, name, x, y) {
+    // Nunca crear cursor para el propio socket
+    if (id === this.socket?.id) return;
     if (!this._cursors[id]) {
       const el = document.createElement('div');
       el.className = 'cd-remote-cursor';
