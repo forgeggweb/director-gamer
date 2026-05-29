@@ -15959,8 +15959,7 @@ function stopAutosave() {
 }
 
 function _buildSaveData() {
-  // Enriquecer objetos con imgUrl desde su asset si no la tienen directamente
-  // (necesario para tiles colocados desde el tilemap que solo tienen assetId)
+  // Enriquecer objetos con imgUrl desde su asset (para tiles que solo tienen assetId)
   const enrichedObjects = (STATE.objects || []).map(o => {
     if (!o.imgUrl && o.assetId && typeof ASSETS !== 'undefined') {
       const asset = ASSETS.find(a => a.id === o.assetId);
@@ -15968,7 +15967,6 @@ function _buildSaveData() {
     }
     return o;
   });
-
   return {
     projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
     objects:     enrichedObjects,
@@ -16128,8 +16126,7 @@ function _applyProjectData(data, _fromCD) {
     if (typeof renderSceneTree === 'function') renderSceneTree();
     if (typeof renderLayers    === 'function') renderLayers();
     if (typeof updateStatusBar === 'function') updateStatusBar();
-    // Aplicar texturas DESPUÉS de todos los renders para evitar que
-    // re-renders posteriores borren las imágenes ya aplicadas.
+    // Aplicar texturas DESPUÉS de todos los renders para evitar que re-renders borren las imágenes
     requestAnimationFrame(() => {
       for (const o of (data.objects || [])) {
         if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
@@ -20687,6 +20684,395 @@ window.openWelcome = function() {
 
 </script>
 
+<!-- ══════════════════════════════════════════════════════════
+     LOGIN SCREEN — Clave de sesión + aislamiento de perfiles
+══════════════════════════════════════════════════════════ -->
+<style>
+#dg-login-overlay {
+  position: fixed; inset: 0; z-index: 99999;
+  background: #0e0c14;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+  font-family: 'Roboto', sans-serif;
+}
+#dg-login-overlay.hidden { display: none; }
+
+.dgl-shell {
+  width: 360px;
+  background: #1C1B1F;
+  border: 1px solid #48464E;
+  border-radius: 20px;
+  padding: 36px 32px 32px;
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(102,157,246,.08);
+  position: relative;
+  overflow: hidden;
+}
+.dgl-shell::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(26,115,232,.04) 0%, transparent 50%, rgba(52,168,83,.04) 100%);
+  pointer-events: none;
+}
+
+.dgl-logo {
+  display: flex; align-items: center; gap: 9px;
+  font-family: 'Google Sans Display', sans-serif;
+  font-weight: 800; font-size: 18px;
+  color: #669DF6; letter-spacing: -.3px;
+}
+.dgl-logo-dot {
+  width: 10px; height: 10px;
+  background: #1A73E8; border-radius: 50%;
+  box-shadow: 0 0 12px #1A73E8;
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.dgl-title {
+  font-family: 'Google Sans', sans-serif;
+  font-size: 22px; font-weight: 700;
+  color: #E6E1E5; text-align: center;
+  line-height: 1.25;
+}
+.dgl-sub {
+  font-size: 12.5px; color: #938F99; text-align: center; margin-top: -16px;
+}
+
+.dgl-fields { width: 100%; display: flex; flex-direction: column; gap: 12px; }
+.dgl-label { font-size: 11px; color: #669DF6; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; margin-bottom: 4px; }
+.dgl-input {
+  width: 100%; background: #2B2930; border: 1px solid #48464E;
+  border-radius: 10px; color: #E6E1E5; font-size: 14px;
+  font-family: 'Roboto', sans-serif; padding: 10px 14px; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.dgl-input:focus { border-color: #1A73E8; box-shadow: 0 0 0 3px rgba(26,115,232,.15); }
+
+.dgl-pin-row { display: flex; gap: 10px; justify-content: center; }
+.dgl-pin-digit {
+  width: 52px; height: 62px;
+  background: #2B2930; border: 1.5px solid #48464E;
+  border-radius: 12px; color: #E6E1E5;
+  font-size: 26px; font-weight: 700; text-align: center;
+  font-family: 'Roboto Mono', monospace;
+  outline: none; caret-color: #1A73E8;
+  transition: border-color .15s, box-shadow .15s;
+  -webkit-text-security: disc;
+  letter-spacing: 0;
+}
+.dgl-pin-digit:focus { border-color: #1A73E8; box-shadow: 0 0 0 3px rgba(26,115,232,.2); }
+.dgl-pin-digit.filled { border-color: rgba(52,168,83,.6); }
+
+.dgl-hint { font-size: 11px; color: #605D67; text-align: center; line-height: 1.5; }
+.dgl-hint strong { color: #938F99; }
+
+.dgl-enter-btn {
+  width: 100%; padding: 13px;
+  background: linear-gradient(135deg, #1A73E8, #1557b0);
+  border: none; border-radius: 12px;
+  color: #fff; font-family: 'Google Sans', sans-serif;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  transition: all .18s; letter-spacing: .3px;
+  box-shadow: 0 4px 16px rgba(26,115,232,.35);
+}
+.dgl-enter-btn:hover { background: linear-gradient(135deg, #1e84ff, #1A73E8); box-shadow: 0 6px 22px rgba(26,115,232,.5); transform: translateY(-1px); }
+.dgl-enter-btn:active { transform: scale(.97); }
+.dgl-enter-btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+.dgl-err {
+  font-size: 12px; color: #EA4335; text-align: center;
+  min-height: 18px; margin-top: -8px;
+  animation: dgl-shake .3s ease;
+}
+@keyframes dgl-shake {
+  0%,100%{transform:translateX(0)}
+  25%{transform:translateX(-6px)}
+  75%{transform:translateX(6px)}
+}
+
+.dgl-session-info {
+  font-size: 11px; color: #48464E; text-align: center;
+  border-top: 1px solid #2B2930; padding-top: 16px; width: 100%;
+}
+.dgl-session-info span { color: #605D67; }
+.dgl-change-user {
+  background: none; border: none; color: #1A73E8; font-size: 11px;
+  cursor: pointer; text-decoration: underline; padding: 0; margin-left: 6px;
+}
+</style>
+
+<div id="dg-login-overlay" class="hidden">
+  <div class="dgl-shell">
+    <div class="dgl-logo"><div class="dgl-logo-dot"></div>Director Gamer</div>
+    <div>
+      <div class="dgl-title">Iniciar sesión</div>
+      <div class="dgl-sub">Tu clave mantiene tus proyectos privados</div>
+    </div>
+
+    <div class="dgl-fields">
+      <div>
+        <div class="dgl-label">Nombre de usuario</div>
+        <input class="dgl-input" id="dgl-username" placeholder="Ej: Ana López" maxlength="32" autocomplete="off"
+          oninput="dglOnInput()" onkeydown="if(event.key==='Enter')document.getElementById('dgl-pin-1').focus()">
+      </div>
+      <div>
+        <div class="dgl-label">Clave de 4 dígitos</div>
+        <div class="dgl-pin-row">
+          <input class="dgl-pin-digit" id="dgl-pin-1" type="password" inputmode="numeric" maxlength="1" pattern="[0-9]"
+            oninput="dglPinInput(this,null,'dgl-pin-2')" onkeydown="dglPinKey(event,this,null,'dgl-pin-2')">
+          <input class="dgl-pin-digit" id="dgl-pin-2" type="password" inputmode="numeric" maxlength="1" pattern="[0-9]"
+            oninput="dglPinInput(this,'dgl-pin-1','dgl-pin-3')" onkeydown="dglPinKey(event,this,'dgl-pin-1','dgl-pin-3')">
+          <input class="dgl-pin-digit" id="dgl-pin-3" type="password" inputmode="numeric" maxlength="1" pattern="[0-9]"
+            oninput="dglPinInput(this,'dgl-pin-2','dgl-pin-4')" onkeydown="dglPinKey(event,this,'dgl-pin-2','dgl-pin-4')">
+          <input class="dgl-pin-digit" id="dgl-pin-4" type="password" inputmode="numeric" maxlength="1" pattern="[0-9]"
+            oninput="dglPinInput(this,'dgl-pin-3',null)" onkeydown="dglPinKey(event,this,'dgl-pin-3',null)">
+        </div>
+      </div>
+    </div>
+
+    <div class="dgl-err" id="dgl-err"></div>
+
+    <button class="dgl-enter-btn" id="dgl-enter-btn" onclick="dglSubmit()" disabled>
+      ✦ Entrar al engine
+    </button>
+
+    <div class="dgl-hint">
+      <strong>Primera vez:</strong> elegí un nombre y una clave de 4 números.<br>
+      La próxima vez usá los mismos para recuperar tus proyectos.
+    </div>
+
+    <div class="dgl-session-info" id="dgl-session-info" style="display:none;">
+      Sesión guardada como <span id="dgl-saved-name"></span>
+      <button class="dgl-change-user" onclick="dglSwitchUser()">Cambiar usuario</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════
+   LOGIN SYSTEM — Clave de sesión persistente
+   Genera window._CD_userId = hash(username + pin)
+   Aísla: perfiles localStorage, proyectos en servidor
+══════════════════════════════════════════════════════════ */
+(function() {
+  const SESSION_KEY = 'dg_session_v1';
+
+  /* ── Simple hash djb2 → hex string ── */
+  function _hash(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+    return Math.abs(h).toString(16).padStart(8, '0');
+  }
+
+  /* ── Genera un userId estable a partir de nombre + PIN ── */
+  function _makeUserId(username, pin) {
+    return 'u_' + _hash(username.trim().toLowerCase() + ':' + pin);
+  }
+
+  /* ── Prefijos de localStorage aislados por usuario ── */
+  function _profilesKey(uid) { return 'dg_profiles_' + uid; }
+  function _activeKey(uid)   { return 'dg_active_'   + uid; }
+
+  /* ── Activar sesión: redirigir las claves de localStorage al usuario ── */
+  function _activateSession(username, pin) {
+    const uid = _makeUserId(username, pin);
+    window._CD_userId = uid;
+    window._DG_USERNAME = username.trim();
+
+    // Redirigir las claves de perfiles al namespace del usuario
+    // Así cada usuario tiene sus propios perfiles aislados
+    const profKey   = _profilesKey(uid);
+    const activeKey = _activeKey(uid);
+
+    // Monkey-patch las funciones de perfil para usar las claves del usuario
+    window._DG_PSO_PROFILES_KEY = profKey;
+    window._DG_PSO_ACTIVE_KEY   = activeKey;
+
+    // Guardar sesión en localStorage para recordar al usuario
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ username: username.trim(), uid, savedAt: Date.now() }));
+    } catch(e) {}
+
+    return uid;
+  }
+
+  /* ── Intentar restaurar sesión guardada ── */
+  function _tryRestoreSession() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+      if (s && s.uid && s.username) return s;
+    } catch(e) {}
+    return null;
+  }
+
+  /* ═══ API pública ═══ */
+  window.DGL = {
+    _hash, _makeUserId, _profilesKey, _activeKey, _activateSession, _tryRestoreSession,
+
+    /* Abrir pantalla de login */
+    open() {
+      const saved = _tryRestoreSession();
+      if (saved) {
+        // Mostrar nombre guardado y opción de cambiar
+        document.getElementById('dgl-saved-name').textContent = saved.username;
+        document.getElementById('dgl-session-info').style.display = 'block';
+        document.getElementById('dgl-username').value = saved.username;
+        document.getElementById('dgl-username').closest('.dgl-fields').children[0].style.display = 'none';
+        document.getElementById('dgl-enter-btn').disabled = false;
+        document.getElementById('dgl-enter-btn').textContent = '✦ Continuar como ' + saved.username;
+      }
+      document.getElementById('dg-login-overlay').classList.remove('hidden');
+      setTimeout(() => {
+        const first = document.getElementById('dgl-pin-1');
+        if (first) first.focus();
+      }, 80);
+    },
+
+    /* Cerrar y arrancar la app */
+    close() {
+      document.getElementById('dg-login-overlay').classList.add('hidden');
+    },
+  };
+})();
+
+/* ── Input helpers ── */
+function dglPinInput(el, prevId, nextId) {
+  const v = el.value.replace(/\D/g, '');
+  el.value = v ? v[0] : '';
+  el.classList.toggle('filled', !!el.value);
+  if (el.value && nextId) document.getElementById(nextId).focus();
+  dglOnInput();
+  // Auto-submit cuando se completan los 4 dígitos
+  if (nextId === null && el.value) {
+    setTimeout(dglCheckAutoSubmit, 50);
+  }
+}
+function dglPinKey(e, el, prevId, nextId) {
+  if (e.key === 'Backspace' && !el.value && prevId) {
+    document.getElementById(prevId).focus();
+  }
+  if (e.key === 'Enter') dglSubmit();
+}
+function dglOnInput() {
+  const name = document.getElementById('dgl-username').value.trim();
+  const pin  = ['dgl-pin-1','dgl-pin-2','dgl-pin-3','dgl-pin-4'].map(id => document.getElementById(id).value).join('');
+  const nameVisible = document.getElementById('dgl-username').closest('.dgl-fields').children[0].style.display !== 'none';
+  const nameOk = !nameVisible || name.length >= 2;
+  const pinOk  = pin.length === 4;
+  const btn = document.getElementById('dgl-enter-btn');
+  btn.disabled = !(nameOk && pinOk);
+  if (nameOk && pinOk) btn.textContent = '✦ Entrar al engine';
+  document.getElementById('dgl-err').textContent = '';
+}
+function dglCheckAutoSubmit() {
+  const pin = ['dgl-pin-1','dgl-pin-2','dgl-pin-3','dgl-pin-4'].map(id => document.getElementById(id).value).join('');
+  const name = document.getElementById('dgl-username').value.trim();
+  if (pin.length === 4 && (name.length >= 2 || document.getElementById('dgl-username').closest('.dgl-fields').children[0].style.display === 'none')) {
+    dglSubmit();
+  }
+}
+function dglSwitchUser() {
+  // Mostrar el campo de nombre de nuevo
+  document.getElementById('dgl-username').closest('.dgl-fields').children[0].style.display = 'block';
+  document.getElementById('dgl-session-info').style.display = 'none';
+  document.getElementById('dgl-username').value = '';
+  ['dgl-pin-1','dgl-pin-2','dgl-pin-3','dgl-pin-4'].forEach(id => {
+    const el = document.getElementById(id);
+    el.value = '';
+    el.classList.remove('filled');
+  });
+  document.getElementById('dgl-enter-btn').disabled = true;
+  document.getElementById('dgl-enter-btn').textContent = '✦ Entrar al engine';
+  document.getElementById('dgl-username').focus();
+  // Borrar sesión guardada
+  try { localStorage.removeItem('dg_session_v1'); } catch(e) {}
+}
+function dglSubmit() {
+  const btn = document.getElementById('dgl-enter-btn');
+  if (btn.disabled) return;
+
+  const nameFieldVisible = document.getElementById('dgl-username').closest('.dgl-fields').children[0].style.display !== 'none';
+  let username;
+  if (nameFieldVisible) {
+    username = document.getElementById('dgl-username').value.trim();
+    if (username.length < 2) {
+      document.getElementById('dgl-err').textContent = 'El nombre debe tener al menos 2 caracteres.';
+      return;
+    }
+  } else {
+    // Usar nombre de sesión guardada
+    try {
+      const s = JSON.parse(localStorage.getItem('dg_session_v1') || 'null');
+      username = s ? s.username : document.getElementById('dgl-username').value.trim();
+    } catch(e) { username = document.getElementById('dgl-username').value.trim(); }
+  }
+
+  const pin = ['dgl-pin-1','dgl-pin-2','dgl-pin-3','dgl-pin-4'].map(id => document.getElementById(id).value).join('');
+  if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+    document.getElementById('dgl-err').textContent = 'Ingresá una clave de 4 números.';
+    ['dgl-pin-1'].forEach(id => document.getElementById(id).focus());
+    return;
+  }
+
+  // Activar sesión → genera _CD_userId único para este usuario
+  const uid = DGL._activateSession(username, pin);
+
+  // Redirigir localStorage de perfiles al namespace del usuario
+  // Patcheamos psoLoadProfiles y psoSaveProfiles para usar claves del usuario
+  const profKey   = DGL._profilesKey(uid);
+  const activeKey = DGL._activeKey(uid);
+
+  // Override de las funciones de perfil con las claves del usuario
+  window.psoLoadProfiles = function() {
+    try { _psoProfiles = JSON.parse(localStorage.getItem(profKey)) || []; } catch(e) { _psoProfiles = []; }
+  };
+  window.psoSaveProfiles = function() {
+    try { localStorage.setItem(profKey, JSON.stringify(_psoProfiles)); } catch(e) {}
+  };
+  window.psoGetActiveIdx = function() {
+    try { return parseInt(localStorage.getItem(activeKey)) || 0; } catch(e) { return 0; }
+  };
+  window.psoSetActiveIdx = function(idx) {
+    try { localStorage.setItem(activeKey, String(idx)); } catch(e) {}
+    if (_psoProfiles[idx]) {
+      _dpProfile = { ..._dpProfile, ..._psoProfiles[idx] };
+      if (typeof dpSave === 'function') dpSave();
+    }
+  };
+
+  // Cerrar login y abrir selector de perfil
+  DGL.close();
+  openProfileSelector();
+}
+
+/* ── Iniciar: mostrar login antes que cualquier otra cosa ── */
+document.addEventListener('DOMContentLoaded', function() {
+  // Interceptar initEtapa5 para que NO llame openProfileSelector directamente,
+  // sino que primero pase por el login.
+  // Como initEtapa5 ya está registrado, lo que hacemos es abrir el login overlay
+  // inmediatamente y bloquear openProfileSelector hasta que el login complete.
+  const _origOpenProfileSelector = window.openProfileSelector;
+  let _loginDone = false;
+  window.openProfileSelector = function() {
+    if (!_loginDone) return; // bloqueado hasta login
+    _origOpenProfileSelector();
+  };
+
+  // Registrar que cuando DGL cierre, desbloqueamos
+  const _origDglClose = DGL.close.bind(DGL);
+  DGL.close = function() {
+    _loginDone = true;
+    window.openProfileSelector = _origOpenProfileSelector;
+    _origDglClose();
+    // Ahora sí abrir el selector de perfil
+    _origOpenProfileSelector();
+  };
+
+  // Mostrar el login
+  DGL.open();
+});
+</script>
+
 </body>
 </html>
 
@@ -21072,6 +21458,18 @@ window.openWelcome = function() {
           <input class="cd-input" id="cd-my-name" placeholder="Ej: María, Equipo Rojo…" value="Director">
         </div>
 
+        <div class="cd-field">
+          <div class="cd-label" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>URL del servidor <span style="opacity:.5;font-weight:400;">(opcional)</span></span>
+            <span id="cd-srv-test-status" style="font-size:10px;"></span>
+          </div>
+          <input class="cd-input" id="cd-server-url" placeholder="https://tu-app.onrender.com"
+            style="font-size:11px;" oninput="CD._onServerUrlChange(this.value)">
+          <div style="font-size:10px;color:rgba(196,180,214,.35);margin-top:4px;">
+            Dejá vacío si el HTML ya se sirve desde el servidor
+          </div>
+        </div>
+
         <!-- Solo host: elegir proyecto -->
         <div id="cd-host-section">
           <div class="cd-label" style="margin-bottom:8px;">Proyecto a compartir</div>
@@ -21135,23 +21533,6 @@ window.openWelcome = function() {
 </div>
 
 <script>
-/* ═══════════════════════════════════════════════════════════
-   USER ID — Identificador único y persistente por navegador.
-   Evita que todos compartan el namespace "anon" en el servidor.
-═══════════════════════════════════════════════════════════ */
-(function() {
-  const KEY = 'dg_user_id';
-  let uid = null;
-  try { uid = localStorage.getItem(KEY); } catch(e) {}
-  if (!uid) {
-    // Generar un ID único de 16 chars alfanuméricos
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    uid = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-    try { localStorage.setItem(KEY, uid); } catch(e) {}
-  }
-  window._CD_userId = uid;
-})();
-
 /* ═══════════════════════════════════════════════════════════
    _SRV — Capa de servidor (Socket.io)
    Expone: saveProject, loadProject, listProjects, clearProjects
@@ -21240,6 +21621,7 @@ const CD = {
     const inp  = document.getElementById('cd-my-name');
     if (inp && prof.name) inp.value = prof.name;
     this._populateProjects();
+    this._loadServerUrl();
     document.getElementById('cd-overlay').classList.add('open');
   },
   close() { document.getElementById('cd-overlay').classList.remove('open'); },
@@ -21252,7 +21634,8 @@ const CD = {
 
     if (!window._SRV._socket || !window._SRV._socket.connected) {
       // Conectar solo para listar
-      const tmpSock = io();
+      const serverUrl = window._DG_SERVER_URL || undefined;
+      const tmpSock = serverUrl ? io(serverUrl, { transports: ['websocket','polling'] }) : io({ transports: ['websocket','polling'] });
       tmpSock.once('connect', () => {
         window._SRV._attach(tmpSock);
         this._loadProjList(list);
@@ -21345,14 +21728,35 @@ const CD = {
   /* ── Conectar socket ── */
   _connect(cb) {
     if (this.socket) { this.socket.disconnect(); this.socket = null; }
-    this.socket = io();
+
+    // Verificar que socket.io esté disponible
+    if (typeof io === 'undefined') {
+      this._setStatus('red', 'Socket.io no disponible — ¿el servidor está corriendo?');
+      this._log('❌ socket.io no cargado. Servir el HTML desde el servidor Node.js.');
+      return;
+    }
+
+    // Conectar al servidor. Si hay URL configurada (window._DG_SERVER_URL), usarla.
+    const serverUrl = window._DG_SERVER_URL || undefined;
+    try {
+      this.socket = serverUrl
+        ? io(serverUrl, { transports: ['websocket','polling'] })
+        : io({ transports: ['websocket','polling'] });
+    } catch(e) {
+      this._setStatus('red', 'Error al inicializar socket: ' + e.message);
+      return;
+    }
     window._SRV._attach(this.socket);
 
     this.socket.on('connect', () => {
       this._log('🔌 Conectado al servidor');
       cb();
     });
-    this.socket.on('connect_error', () => this._setStatus('red', 'Error de conexión'));
+    this.socket.on('connect_error', (err) => {
+      const msg = err && err.message ? err.message : 'Error de red';
+      this._setStatus('red', 'Sin conexión: ' + msg);
+      this._log('❌ connect_error: ' + msg);
+    });
 
     this.socket.on('session-created', ({ code, peers }) => this._onSessionReady(code, peers));
     this.socket.on('session-joined',  ({ code, peers }) => this._onSessionReady(code, peers));
@@ -21892,6 +22296,25 @@ const CD = {
   _genCode() {
     const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     return Array.from({length:6}, () => c[Math.floor(Math.random()*c.length)]).join('');
+  },
+
+  /* ── Guardar/leer URL del servidor ── */
+  _onServerUrlChange(val) {
+    const v = val.trim();
+    window._DG_SERVER_URL = v || undefined;
+    try { if (v) localStorage.setItem('dg_server_url', v); else localStorage.removeItem('dg_server_url'); } catch(e) {}
+    const st = document.getElementById('cd-srv-test-status');
+    if (st) st.textContent = '';
+  },
+  _loadServerUrl() {
+    try {
+      const saved = localStorage.getItem('dg_server_url') || '';
+      if (saved) {
+        window._DG_SERVER_URL = saved;
+        const el = document.getElementById('cd-server-url');
+        if (el) el.value = saved;
+      }
+    } catch(e) {}
   },
 };
 
