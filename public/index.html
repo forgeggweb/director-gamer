@@ -21867,6 +21867,14 @@ const CD = {
       // Contar cuántos peers conocíamos antes del merge
       const prevPeerCount = Object.keys(this._peers).length;
       this._mergePeers(peers);
+      // Asegurar que el propio perfil siempre esté actualizado en _peers
+      if (this.socket?.id) {
+        this._peers[this.socket.id] = {
+          ...(this._peers[this.socket.id] || {}),
+          profile: this._getProfile(),
+          name: this.myName,
+        };
+      }
       this._renderDirectors(peers);
       this._log(`👥 ${peers.length} director${peers.length !== 1 ? 'es' : ''} en sesión`);
 
@@ -21906,15 +21914,13 @@ const CD = {
 
     // Recibir cambios en tiempo real
     this.socket.on('project-update', data => {
-      // El host es la fuente de verdad: ignora project-update ajenos para no ser sobreescrito
-      if (this.isHost) return;
       // Ignorar echo del propio socket
       if (data._fromSocketId && data._fromSocketId === this.socket?.id) return;
       this._broadcasting = true;
       _applyProjectData(data, true);
       // Si no es un update de drag, loguear
       if (!data._isDragUpdate) {
-        this._log('🔄 Canvas actualizado por el host');
+        this._log('🔄 Canvas actualizado por co-director');
       }
       // Reset después del rAF de _applyProjectData para no re-emitir el propio update
       requestAnimationFrame(() => { this._broadcasting = false; });
@@ -21944,6 +21950,14 @@ const CD = {
     }
 
     this._mergePeers(peers);
+    // Guardar propio perfil en _peers usando el socket id actual
+    if (this.socket?.id) {
+      this._peers[this.socket.id] = {
+        ...(this._peers[this.socket.id] || {}),
+        profile: this._getProfile(),
+        name: this.myName,
+      };
+    }
     this._renderDirectors(peers);
     this._setStatus2('green', 'Sesión activa');
     this._log(`✅ Sesión ${this.isHost ? 'creada' : 'unida'}: ${code}`);
@@ -21989,13 +22003,12 @@ const CD = {
     if (this._cmdPatchDone) return;
     this._cmdPatchDone = true;
 
-    // Emit completo (con debounce) — solo el HOST emite
+    // Emit completo (con debounce) — cualquier participante puede emitir
     const _emit = () => {
       if (!this.connected || this._broadcasting || !this.socket) return;
-      if (!this.isHost) return;
       clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket || !this.isHost) return;
+        if (!this.connected || !this.socket) return;
         const payload = _buildSaveData();
         payload._fromSocketId = this.socket.id;
         payload._sessionCode  = this.sessionCode; // necesario para que el servidor sepa a qué sala enviar
@@ -22003,18 +22016,16 @@ const CD = {
       }, 180);
     };
 
-    // Emit liviano durante drag (solo posiciones, sin debounce alto)
-    // Envía el estado completo con un debounce corto para que el guest vea el movimiento en tiempo real
+    // Emit liviano durante drag — cualquier participante puede emitir
     const _emitDrag = () => {
       if (!this.connected || this._broadcasting || !this.socket) return;
-      if (!this.isHost) return;
       clearTimeout(this._dragSyncTimer);
       this._dragSyncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket || !this.isHost) return;
+        if (!this.connected || !this.socket) return;
         const payload = _buildSaveData();
         payload._fromSocketId = this.socket.id;
         payload._sessionCode  = this.sessionCode;
-        payload._isDragUpdate = true; // flag para que el guest no lo muestre como carga completa
+        payload._isDragUpdate = true; // flag para que el receptor no lo muestre como carga completa
         this.socket.emit('project-update', payload);
       }, 40); // 40ms ≈ 25fps durante drag
     };
@@ -22078,8 +22089,8 @@ const CD = {
   _refreshCards() {
     const grid = document.getElementById('cd-directors-grid');
     if (!grid) return;
-    // Re-render con los datos actualizados
-    const peers = Object.entries(this._peers).map(([id, p]) => ({ id, ...p }));
+    // Re-render con los datos actualizados (incluye id, name, role, profile)
+    const peers = Object.entries(this._peers).map(([id, p]) => ({ id, name: p.name, role: p.role, profile: p.profile }));
     if (peers.length) this._renderDirectors(peers);
   },
 
@@ -22228,7 +22239,8 @@ const CD = {
     grid.innerHTML = peers.map(p => {
       const isMe   = p.id === myId;
       const cached = this._peers[p.id] || {};
-      const prof   = p.profile || cached.profile || {};
+      // Para el propio usuario, usar perfil local directo (garantiza foto actualizada)
+      const prof   = isMe ? this._getProfile() : (p.profile || cached.profile || {});
       const tn     = prof.cardTheme || 1;
       const t      = THEMES[tn] || THEMES[1];
       const cid    = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
@@ -22476,8 +22488,15 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <!-- SERVIDOR: exponer eventos necesarios en server.js
+  // Retransmitir perfil de peers (necesario para mostrar fotos de perfil)
   socket.on('peer-profile', ({ sessionCode, profile, name }) => {
     socket.to(sessionCode).emit('peer-profile', { fromId: socket.id, profile, name });
+  });
+  // project-update ahora es BIDIRECCIONAL: cualquier participante puede emitir
+  // El servidor debe retransmitir a toda la sala EXCEPTO al emisor
+  socket.on('project-update', (data) => {
+    const code = data._sessionCode;
+    if (code) socket.to(code).emit('project-update', { ...data, _fromSocketId: socket.id });
   });
   socket.on('srv-save',  ({ reqId, userId, data })  => { /* guardar proyecto */ socket.emit('srv-response', { reqId, ok:true, data:{id} }); });
   socket.on('srv-list',  ({ reqId, userId })         => { /* listar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:[...] }); });
