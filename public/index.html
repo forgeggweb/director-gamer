@@ -19641,6 +19641,20 @@ function imDoImport() {
       o.spriteSheet.frameW=tw; o.spriteSheet.frameH=th;
       updateRightPanel();
       toast('✅ Imagen importada ('+tw+'×'+th+')');
+      // Forzar full sync para que el co-director reciba la textura
+      if (window.CD && window.CD.connected && typeof _buildSaveData === 'function') {
+        setTimeout(() => {
+          try {
+            const payload = _buildSaveData();
+            payload._fromSocketId = window.CD.socket?.id;
+            payload._sessionCode  = window.CD.sessionCode;
+            payload._isFullSync   = true;
+            window.CD._lastSyncedAssetIds = new Set((payload.assets||[]).map(a=>a.id));
+            window.CD.socket.emit('project-update', payload);
+            window.CD._log('📦 Textura importada — sync completo enviado');
+          } catch(e) { console.warn('CD texture sync error:', e); }
+        }, 200);
+      }
     } else {
       toast('⚠ Seleccioná un objeto primero');
     }
@@ -19670,6 +19684,20 @@ function imDoImport() {
     updateRightPanel();
     toast('✅ Spritesheet: '+(cols*rows)+' frames → "'+anim.name+'"');
     imClose();
+    // Forzar full sync — los frames base64 son voluminosos y deben llegar enteros
+    if (window.CD && window.CD.connected && typeof _buildSaveData === 'function') {
+      setTimeout(() => {
+        try {
+          const payload = _buildSaveData();
+          payload._fromSocketId = window.CD.socket?.id;
+          payload._sessionCode  = window.CD.sessionCode;
+          payload._isFullSync   = true;
+          window.CD._lastSyncedAssetIds = new Set((payload.assets||[]).map(a=>a.id));
+          window.CD.socket.emit('project-update', payload);
+          window.CD._log('📦 Spritesheet importado — sync completo enviado ('+(cols*rows)+' frames)');
+        } catch(e) { console.warn('CD texture sync error:', e); }
+      }, 200);
+    }
   }
 }
 
@@ -22017,6 +22045,8 @@ const CD = {
       window._SRV.loadProject(this.selectedProjId).then(data => {
         if (!data) return;
         _applyProjectData(data, true);
+        // Registrar assets conocidos para que _buildLightPayload detecte novedades
+        this._lastSyncedAssetIds = new Set((data.assets || []).map(a => a.id));
         this.socket.emit('project-load', data);
         this._log(`📤 Proyecto "${data.projectName}" enviado a la sala`);
       });
@@ -22051,19 +22081,70 @@ const CD = {
     data._fromSocketId = this.socket.id;
     data._sessionCode  = this.sessionCode;
     data._isFullSync   = true; // flag: payload completo con assets
+    // Registrar qué assets ya conoce el receptor para detectar nuevos en updates futuros
+    this._lastSyncedAssetIds = new Set((data.assets || []).map(a => a.id));
     this.socket.emit('project-update', data);
     this._log(`📤 Canvas sincronizado con la sala`);
   },
 
   /* ── Construir payload liviano para updates incrementales ── */
-  /* Los objetos conservan imgUrl/spriteSheet.url para que el receptor muestre texturas.
-     Se omite el array ASSETS completo (que puede pesar MB) porque ya fue enviado
-     en el project-load inicial. Solo se re-envían assets en full syncs. */
+  /* REGLA: los assets (base64) NO viajan en updates incrementales — ya fueron enviados
+     en el project-load inicial. Pero hay dos casos especiales:
+     1) Un peer importó una textura NUEVA localmente → el otro no la tiene → full sync.
+     2) Los objetos pueden tener imgUrl con base64 incrustado (enriquecido por _buildSaveData).
+        Esas URLs pueden pesar MBs cada una y CRASHEAN al receptor si el asset no está en su ASSETS[].
+        Solución: en el payload liviano, strip del imgUrl base64 largo y dejar solo assetId.
+        El receptor usa _applyObjImgUrl que resuelve desde su ASSETS[] local. */
   _buildLightPayload() {
     const data = _buildSaveData();
-    // Quitar assets del payload incremental — ya los tiene el receptor del project-load
-    // Esto reduce el tamaño de cada update de potencialmente 5MB a <50KB
+
+    // Detectar si hay assets NUEVOS que el receptor no conoce.
+    // Comparar con el set de assetIds del último full sync conocido.
+    const currentAssetIds = new Set((data.assets || []).map(a => a.id));
+    const knownIds        = this._lastSyncedAssetIds || new Set();
+    const hasNewAssets    = [...currentAssetIds].some(id => !knownIds.has(id));
+
+    if (hasNewAssets) {
+      // Hay texturas nuevas → full sync (incluye assets completos)
+      data._fromSocketId = this.socket?.id;
+      data._sessionCode  = this.sessionCode;
+      data._isFullSync   = true;
+      this._lastSyncedAssetIds = currentAssetIds;
+      this._log('📦 Nueva textura detectada — sincronizando assets completos');
+      return data; // retornar CON assets
+    }
+
+    // Update incremental — quitar assets y limpiar imgUrl base64 de los objetos
+    // para evitar payloads de MBs y crashes en el receptor.
     delete data.assets;
+
+    // Strip imgUrl si es base64 (data:image/...) — el receptor la resuelve
+    // desde su ASSETS[] local usando assetId. Si no tiene assetId, conservar
+    // la URL (puede ser una URL externa corta, no un base64).
+    const BASE64_THRESH = 512; // caracteres — cualquier cosa más larga es data URL
+    data.objects = (data.objects || []).map(o => {
+      let obj = { ...o };
+      // Strip imgUrl base64 largo
+      if (obj.imgUrl && obj.imgUrl.length > BASE64_THRESH) {
+        delete obj.imgUrl; // el receptor lo resuelve via assetId → ASSETS[]
+      }
+      // Strip spriteSheet.url base64 largo
+      if (obj.spriteSheet && obj.spriteSheet.url && obj.spriteSheet.url.length > BASE64_THRESH) {
+        obj.spriteSheet = { ...obj.spriteSheet, url: undefined };
+      }
+      // Strip frames base64 de animaciones — cada frame puede pesar 50-200KB
+      if (obj.animations && obj.animations.length) {
+        obj.animations = obj.animations.map(anim => {
+          if (!anim.frames || !anim.frames.length) return anim;
+          const hasBase64Frames = anim.frames.some(f => f && f.length > BASE64_THRESH);
+          if (!hasBase64Frames) return anim;
+          // Quitar frames — el receptor los tiene del full sync previo
+          return { ...anim, frames: [] };
+        });
+      }
+      return obj;
+    });
+
     data._fromSocketId = this.socket?.id;
     data._sessionCode  = this.sessionCode;
     return data;
@@ -22161,7 +22242,16 @@ const CD = {
     const grid = document.getElementById('cd-directors-grid');
     if (!grid) return;
     // Re-render con los datos actualizados (incluye id, name, role, profile)
-    const peers = Object.entries(this._peers).map(([id, p]) => ({ id, name: p.name, role: p.role, profile: p.profile }));
+    const myId = this.socket?.id;
+    const peers = Object.entries(this._peers).map(([id, p]) => {
+      const isMe = id === myId;
+      return {
+        id,
+        name:    isMe ? (this._getProfile().name || this.myName) : p.name,
+        role:    p.role,
+        profile: isMe ? this._getProfile() : p.profile,
+      };
+    });
     if (peers.length) this._renderDirectors(peers);
   },
 
@@ -22173,12 +22263,17 @@ const CD = {
 
     // Enriquecer cada peer con lo que tenemos cacheado en _peers
     // (el servidor a veces no manda profile en peers-updated)
+    // ORDEN CORRECTO: cached.profile viene del canal peer-profile (más completo: foto, titulo, tema)
+    // p.profile viene del servidor peers-updated (parcial). El caché DEBE ganar.
     const peers = peersIn.map(p => {
       const cached = this._peers[p.id] || {};
+      const isMe   = p.id === this.socket?.id;
       return {
         ...p,
-        name:    cached.name    || p.name,
-        profile: Object.assign({}, p.profile || {}, cached.profile || {}),
+        name:    isMe ? (this._getProfile().name || this.myName) : (cached.profile?.name || cached.name || p.name),
+        profile: isMe
+          ? this._getProfile()
+          : Object.assign({}, p.profile || {}, cached.profile || {}), // caché sobre server — correcto
       };
     });
 
