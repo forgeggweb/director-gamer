@@ -21883,6 +21883,16 @@ const CD = {
       if (this.isHost && peers.length > prevPeerCount) {
         // Pequeño delay para asegurar que el guest ya procesó la conexión
         setTimeout(() => this._sendProjectToRoom(), 250);
+        // También reenviar nuestro perfil para que el nuevo guest lo vea
+        setTimeout(() => {
+          if (this.socket) {
+            this.socket.emit('peer-profile', {
+              sessionCode: this.sessionCode,
+              profile:     this._getProfile(),
+              name:        this.myName,
+            });
+          }
+        }, 400);
       }
 
       // Anunciar nuestro propio perfil a los nuevos
@@ -21898,9 +21908,25 @@ const CD = {
     // Recibir perfiles de otros usuarios (canal propio, no depende del servidor)
     this.socket.on('peer-profile', ({ fromId, profile, name }) => {
       if (fromId && profile) {
-        this._peers[fromId] = { ...(this._peers[fromId] || {}), profile, name };
+        if (!this._peers[fromId]) this._peers[fromId] = {};
+        this._peers[fromId].profile = profile;
+        // Usar el nombre del perfil (más fiable) o el nombre anunciado
+        this._peers[fromId].name = profile.name || name || this._peers[fromId].name;
         this._refreshCards();
       }
+    });
+
+    // Si el servidor no retransmite peer-profile, el guest solicita perfiles al host
+    // y el host responde directamente
+    this.socket.on('request-profiles', ({ fromId }) => {
+      // Solo el host responde
+      if (!this.isHost || !this.socket) return;
+      this.socket.emit('peer-profile', {
+        sessionCode: this.sessionCode,
+        profile:     this._getProfile(),
+        name:        this.myName,
+        targetId:    fromId, // el servidor puede usar esto para routing
+      });
     });
 
     // Recibir proyecto (solo guests)
@@ -21981,6 +22007,13 @@ const CD = {
           profile:     this._getProfile(),
           name:        this.myName,
         });
+        // Si somos guest, también pedimos los perfiles existentes
+        if (!this.isHost) {
+          this.socket.emit('request-profiles', {
+            sessionCode: code,
+            fromId:      this.socket.id,
+          });
+        }
       }
     }, 300);
 
@@ -22079,9 +22112,13 @@ const CD = {
   _mergePeers(peers) {
     peers.forEach(p => {
       if (!this._peers[p.id]) this._peers[p.id] = {};
-      if (p.profile) this._peers[p.id].profile = p.profile;
-      this._peers[p.id].name = p.name;
-      this._peers[p.id].role = p.role;
+      if (p.profile) {
+        this._peers[p.id].profile = p.profile;
+        // Si el perfil tiene nombre real, usarlo
+        if (p.profile.name) this._peers[p.id].name = p.profile.name;
+      }
+      if (p.name) this._peers[p.id].name = this._peers[p.id].name || p.name;
+      if (p.role) this._peers[p.id].role = p.role;
     });
   },
 
@@ -22095,10 +22132,21 @@ const CD = {
   },
 
   /* ── Render tarjetas idénticas a las de perfil (dp-card) ── */
-  _renderDirectors(peers) {
+  _renderDirectors(peersIn) {
     const grid = document.getElementById('cd-directors-grid');
     if (!grid) return;
     const myId = this.socket?.id;
+
+    // Enriquecer cada peer con lo que tenemos cacheado en _peers
+    // (el servidor a veces no manda profile en peers-updated)
+    const peers = peersIn.map(p => {
+      const cached = this._peers[p.id] || {};
+      return {
+        ...p,
+        name:    cached.name    || p.name,
+        profile: Object.assign({}, p.profile || {}, cached.profile || {}),
+      };
+    });
 
     // Inyectar estilos si no existen — copia exacta de dp-card
     if (!document.getElementById('cd-3d-style')) {
@@ -22239,22 +22287,32 @@ const CD = {
     grid.innerHTML = peers.map(p => {
       const isMe   = p.id === myId;
       const cached = this._peers[p.id] || {};
-      // Para el propio usuario, usar perfil local directo (garantiza foto actualizada)
-      const prof   = isMe ? this._getProfile() : (p.profile || cached.profile || {});
-      const tn     = prof.cardTheme || 1;
-      const t      = THEMES[tn] || THEMES[1];
-      const cid    = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
-      const uid    = 'DG-' + btoa(p.name || 'D').replace(/[^A-Z0-9]/g,'').slice(0,8).padEnd(8,'0');
+
+      // Perfil: para el propio siempre desde _getProfile() (localStorage).
+      // Para peers remotos: fusionar lo que llegó del servidor con el caché local,
+      // priorizando el caché porque viene del canal peer-profile (más completo).
+      const prof = isMe
+        ? this._getProfile()
+        : Object.assign({}, p.profile || {}, cached.profile || {});
+
+      // Nombre: priorizar el del perfil (que tiene el nombre real del usuario),
+      // luego el caché, luego lo que mandó el servidor.
+      const displayName = (isMe ? (this._getProfile().name || this.myName) : (cached.profile?.name || cached.name || p.name)) || 'Director';
+
+      const tn  = prof.cardTheme || 1;
+      const t   = THEMES[tn] || THEMES[1];
+      const cid = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
+      const uid = 'DG-' + btoa(displayName).replace(/[^A-Z0-9]/g,'').slice(0,8).padEnd(8,'0');
 
       // Avatar HTML — idéntico a dpRenderCard
       let avHtml = '';
       if (prof.avatarType === 'photo' && prof.photoDataUrl) {
-        avHtml = `<img src="${prof.photoDataUrl}" alt="${p.name}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">`;
+        avHtml = `<img src="${prof.photoDataUrl}" alt="${displayName}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">`;
       } else if (prof.avatarType === 'pixel' && prof.avatarId) {
         avHtml = `<canvas id="${cid}_av" width="64" height="64" style="width:100%;height:100%;border-radius:50%;image-rendering:pixelated;"></canvas>`;
       } else {
         const EMOJIS = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
-        avHtml = `<span style="font-size:30px;line-height:1;">${prof.avatarEmoji || EMOJIS[(p.name||'D').charCodeAt(0) % EMOJIS.length]}</span>`;
+        avHtml = `<span style="font-size:30px;line-height:1;">${prof.avatarEmoji || EMOJIS[(displayName||'D').charCodeAt(0) % EMOJIS.length]}</span>`;
       }
 
       return `
@@ -22273,7 +22331,7 @@ const CD = {
                     ${avHtml}
                   </div>
                 </div>
-                <div class="cds-name">${p.name || 'Director'}</div>
+                <div class="cds-name">${displayName}</div>
                 <div class="cds-role">${prof.title || (p.role === 'Host' ? 'Game Director' : 'Co-Director')}</div>
                 <div class="cds-divider"></div>
                 <div class="cds-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
@@ -22299,8 +22357,9 @@ const CD = {
     // Post-render: pixel avatars, QR, tilt — igual que dpRenderCard
     requestAnimationFrame(() => {
       peers.forEach(p => {
+        const isMe2  = p.id === myId;
         const cached = this._peers[p.id] || {};
-        const prof   = p.profile || cached.profile || {};
+        const prof   = isMe2 ? this._getProfile() : Object.assign({}, p.profile || {}, cached.profile || {});
         const cid    = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
 
         // Pixel avatar
@@ -22488,12 +22547,17 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <!-- SERVIDOR: exponer eventos necesarios en server.js
-  // Retransmitir perfil de peers (necesario para mostrar fotos de perfil)
-  socket.on('peer-profile', ({ sessionCode, profile, name }) => {
-    socket.to(sessionCode).emit('peer-profile', { fromId: socket.id, profile, name });
+  // ── Perfiles de peers (CRÍTICO para mostrar nombres e imágenes) ──
+  socket.on('peer-profile', ({ sessionCode, profile, name, targetId }) => {
+    // Si targetId existe, enviar solo a ese socket; si no, broadcast a toda la sala
+    if (targetId) socket.to(targetId).emit('peer-profile', { fromId: socket.id, profile, name });
+    else          socket.to(sessionCode).emit('peer-profile', { fromId: socket.id, profile, name });
   });
-  // project-update ahora es BIDIRECCIONAL: cualquier participante puede emitir
-  // El servidor debe retransmitir a toda la sala EXCEPTO al emisor
+  // El guest pide perfiles al host cuando peer-profile no llegó
+  socket.on('request-profiles', ({ sessionCode, fromId }) => {
+    socket.to(sessionCode).emit('request-profiles', { fromId: socket.id });
+  });
+  // ── project-update BIDIRECCIONAL: cualquier participante puede emitir ──
   socket.on('project-update', (data) => {
     const code = data._sessionCode;
     if (code) socket.to(code).emit('project-update', { ...data, _fromSocketId: socket.id });
