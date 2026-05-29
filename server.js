@@ -9,19 +9,16 @@ const io     = new Server(server, {
   cors: { origin: '*', methods: ['GET','POST'] }
 });
 
-// ── Servir el frontend ──────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ── Salas activas: { [sessionCode]: { host, peers: [] } } ───────
 const rooms = {};
 
 io.on('connection', (socket) => {
   console.log('🔌 Conectado:', socket.id);
 
-  // ── Crear sesión (host) ─────────────────────────────────────
   socket.on('create-session', ({ code, name }) => {
     rooms[code] = { host: socket.id, peers: [{ id: socket.id, name, role: 'Host' }] };
     socket.join(code);
@@ -30,54 +27,46 @@ io.on('connection', (socket) => {
     console.log(`🎬 Sesión creada: ${code} por ${name}`);
   });
 
-  // ── Unirse a sesión (guest) ─────────────────────────────────
   socket.on('join-session', ({ code, name }) => {
-    if (!rooms[code]) {
-      socket.emit('error-msg', 'Sesión no encontrada.');
-      return;
-    }
+    if (!rooms[code]) { socket.emit('error-msg', 'Sesión no encontrada.'); return; }
     const peer = { id: socket.id, name, role: 'Co-Director' };
     rooms[code].peers.push(peer);
     socket.join(code);
     socket.sessionCode = code;
-
-    // Avisar a todos en la sala
     io.to(code).emit('peers-updated', rooms[code].peers);
     socket.emit('session-joined', { code, peers: rooms[code].peers });
-    console.log(`👥 ${name} se unió a sesión: ${code}`);
+    console.log(`👥 ${name} se unió a: ${code}`);
   });
 
-  // ── Broadcast de cambios del proyecto ──────────────────────
+  // Host envía el proyecto inicial — se reenvía solo a los guests
+  socket.on('project-load', (data) => {
+    const code = socket.sessionCode;
+    if (!code) return;
+    socket.to(code).emit('project-load', data);
+  });
+
+  // Host broadcast cambios
   socket.on('project-update', (data) => {
     const code = socket.sessionCode;
     if (!code) return;
     socket.to(code).emit('project-update', data);
   });
 
-  // ── Cursor remoto ───────────────────────────────────────────
   socket.on('cursor-move', (data) => {
     const code = socket.sessionCode;
     if (!code) return;
-    socket.to(code).emit('cursor-move', data);
+    socket.to(code).emit('cursor-move', { ...data, id: socket.id });
   });
 
-  // ── Desconexión ─────────────────────────────────────────────
   socket.on('disconnect', () => {
     const code = socket.sessionCode;
     if (!code || !rooms[code]) return;
-
     rooms[code].peers = rooms[code].peers.filter(p => p.id !== socket.id);
-
-    if (rooms[code].peers.length === 0) {
-      delete rooms[code];
-      console.log(`🗑 Sesión cerrada: ${code}`);
-    } else {
-      io.to(code).emit('peers-updated', rooms[code].peers);
-    }
+    if (rooms[code].peers.length === 0) { delete rooms[code]; console.log(`🗑 Sesión cerrada: ${code}`); }
+    else io.to(code).emit('peers-updated', rooms[code].peers);
     console.log('❌ Desconectado:', socket.id);
   });
 });
 
-// ── Arrancar ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`✅ Servidor corriendo en puerto ${PORT}`));
