@@ -21064,25 +21064,26 @@ window.openWelcome = function() {
     return Math.abs(h).toString(16).padStart(8, '0');
   }
 
-  /* ── ID de dispositivo: único por pestaña/sesión de navegador ── */
-  /* Usa sessionStorage (por pestaña) + un sufijo aleatorio por sesión,       */
-  /* así dos pestañas abiertas en el mismo navegador obtienen IDs distintos.  */
+  /* ── ID de dispositivo: persistente en localStorage ── */
+  /* Usa localStorage para que el ID sobreviva al cierre del navegador.        */
+  /* Así el mismo nombre+PIN siempre genera el mismo uid en este dispositivo.  */
   function _getOrCreateDeviceId() {
     try {
-      // Intentar recuperar el ID de esta pestaña desde sessionStorage
-      let did = sessionStorage.getItem(DEVICE_KEY);
+      let did = localStorage.getItem(DEVICE_KEY);
       if (!did) {
-        // Generar ID aleatorio robusto y único por sesión/pestaña
+        // Generar ID aleatorio robusto y único por dispositivo
         const arr = new Uint8Array(16);
         crypto.getRandomValues(arr);
         did = 'dev_' + Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
-        sessionStorage.setItem(DEVICE_KEY, did);
+        localStorage.setItem(DEVICE_KEY, did);
       }
       return did;
     } catch(e) {
       // Fallback: Math.random combinado (suficientemente único para uso práctico)
       if (!window._DG_FALLBACK_DEVICE_ID) {
         window._DG_FALLBACK_DEVICE_ID = 'dev_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        // Intentar persistir el fallback también
+        try { localStorage.setItem(DEVICE_KEY, window._DG_FALLBACK_DEVICE_ID); } catch(e2) {}
       }
       return window._DG_FALLBACK_DEVICE_ID;
     }
@@ -21721,8 +21722,8 @@ function _applyProfileNamespace(uid) {
           </div>
           <input class="cd-input" id="cd-server-url" placeholder="https://tu-app.onrender.com"
             style="font-size:11px;" oninput="CD._onServerUrlChange(this.value)">
-          <div style="font-size:10px;color:rgba(196,180,214,.35);margin-top:4px;">
-            Dejá vacío si el HTML ya se sirve desde el servidor
+          <div style="font-size:10px;color:rgba(196,180,214,.45);margin-top:4px;">
+            <strong style="color:rgba(251,188,4,.7);">Requerido</strong> si abrís el HTML como archivo local · Ej: <code style="font-size:9.5px;color:#c084fc;">https://tu-app.onrender.com</code>
           </div>
         </div>
 
@@ -22012,6 +22013,17 @@ const CD = {
   _doConnect(cb) {
     // Conectar al servidor. Si hay URL configurada (window._DG_SERVER_URL), usarla.
     const serverUrl = window._DG_SERVER_URL || undefined;
+
+    // Si no hay URL y se abre localmente, mostrar error claro en vez de colgar
+    if (!serverUrl) {
+      const isLocal = location.protocol === 'file:' || location.hostname === '' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (isLocal) {
+        this._setStatus('red', 'Ingresá la URL del servidor Render en el campo "URL del Servidor"');
+        this._log('⚠️ Sin URL de servidor. Completá el campo "URL del Servidor" con tu URL de Render/Railway antes de conectar.');
+        return;
+      }
+    }
+
     try {
       this.socket = serverUrl
         ? io(serverUrl, { transports: ['websocket','polling'] })
