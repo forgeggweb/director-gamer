@@ -9049,11 +9049,22 @@ function saveProject() {
   toast('⏳ Guardando…');
 }
 
-function _restoreAssets(data) {
+function _restoreAssets(data, _preserveUrls) {
   // Restaurar ASSETS desde datos guardados
   if (data.assets && Array.isArray(data.assets)) {
+    // Si _preserveUrls: conservar URLs ya descargadas (Co-Director canvas-update)
+    const _prevUrlMap = {};
+    if (_preserveUrls) {
+      ASSETS.forEach(a => { if (a.url && a.url.length > 300) _prevUrlMap[a.id] = a.url; });
+    }
     ASSETS.length = 0;
-    data.assets.forEach(a => ASSETS.push(a));
+    data.assets.forEach(a => {
+      const entry = { ...a };
+      if (_preserveUrls && _prevUrlMap[a.id] && !entry.url) {
+        entry.url = _prevUrlMap[a.id]; // restaurar URL que ya teníamos
+      }
+      ASSETS.push(entry);
+    });
     // Recalcular contador de IDs
     let maxId = 0;
     ASSETS.forEach(a => {
@@ -13243,6 +13254,15 @@ function _applyObjImgUrl(o) {
     if (firstAnimWithGif) url = firstAnimWithGif.gifUrl;
   }
 
+  // Para animaciones frame-a-frame: usar el primer frame disponible como preview
+  if (!url) {
+    const firstAnimWithFrames = (o.animations||[]).find(a => a.frames && a.frames.length > 0);
+    if (firstAnimWithFrames) url = firstAnimWithFrames.frames[0];
+  }
+
+  // Frame cacheado desde texture-response en Co-Director
+  if (!url && o._firstFrameUrl) url = o._firstFrameUrl;
+
   if (!url) return; // sin textura guardada
 
   // Limpiar contenido icon y poner la imagen
@@ -15991,6 +16011,13 @@ function _buildSaveData() {
       obj._needsTexture = true;
       obj.spriteSheet = { ...obj.spriteSheet, url: undefined };
     }
+    // Si el objeto referencia un asset con textura, también marcarlo
+    if (!obj._needsTexture && obj.assetId) {
+      const _refAsset = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(a => a.id === obj.assetId);
+      if (_refAsset && _refAsset.url && _refAsset.url.length > B64) {
+        obj._needsTexture = true; // la textura llega vía el asset, no directamente
+      }
+    }
     if (obj.animations) {
       obj.animations = obj.animations.map(a => {
         const stripped = { ...a };
@@ -16069,7 +16096,20 @@ function _doSave(silent=false) {
 
   // ── Guardar via servidor (Socket.io) ──
   if (window._SRV && typeof window._SRV.saveProject === 'function') {
-    window._SRV.saveProject(data, silent);
+    const _savePromise = window._SRV.saveProject(data, silent);
+    if (_savePromise && typeof _savePromise.then === 'function') {
+      _savePromise.then(result => {
+        if (result && result.id) window._CD_currentProjectId = result.id;
+        else if (result && result.projectId) window._CD_currentProjectId = result.projectId;
+        if (!window._CD_currentProjectId) window._CD_currentProjectId = data.projectName;
+        // Notificar a guests que pueden recargar desde Firebase con texturas completas
+        if (window.CD && window.CD.connected && window.CD.isHost && window._CD_currentProjectId) {
+          const _fmsg = { _type: 'firebase-updated', fromId: window.CD.myPeerId, projectId: window._CD_currentProjectId };
+          window.CD._broadcastAll(_fmsg);
+        }
+      }).catch(() => {});
+    }
+    if (!window._CD_currentProjectId) window._CD_currentProjectId = data.projectName;
   } else {
     // Fallback solo si no hay servidor conectado
     try {
@@ -16200,14 +16240,16 @@ function _applyProjectData(data, _fromCD) {
     // Full sync (data.assets presente): reemplazar completamente.
     // Update incremental (sin assets): conservar los ASSETS locales existentes.
     if (data.assets !== undefined && typeof _restoreAssets === 'function') {
-      _restoreAssets(data);
+      _restoreAssets(data, !!_fromCD);
     }
 
     // ── Merge inteligente de objetos ──
     // En updates incrementales, el payload viene sin imgUrl/spriteSheet.url/frames
     // (fueron stripeados para ahorrar ancho de banda). Hay que preservar las
     // propiedades de textura que ya tiene el receptor en STATE.objects.
-    const isIncrementalUpdate = _fromCD && data.assets === undefined;
+    // NOTA: _buildSaveData() siempre incluye data.assets (array sin base64),
+    // por eso usamos _fromCD directamente como indicador de update incremental.
+    const isIncrementalUpdate = !!_fromCD;
     const prevObjMap = {};
     if (isIncrementalUpdate) {
       (STATE.objects || []).forEach(o => { prevObjMap[o.id] = o; });
@@ -16237,6 +16279,14 @@ function _applyProjectData(data, _fromCD) {
       }
       STATE.objects.push(finalObj);
       if (typeof renderWorldObj === 'function') renderWorldObj(finalObj);
+      // Aplicar textura inmediatamente si ya la tenemos (evita parpadeo)
+      if (typeof _applyObjImgUrl === 'function') {
+        const _hasLocalTex = finalObj.imgUrl ||
+          (finalObj.assetId && (typeof ASSETS !== 'undefined' ? ASSETS : []).find(a => a.id === finalObj.assetId && a.url && a.url.length > 300)) ||
+          (finalObj.spriteSheet && finalObj.spriteSheet.url) ||
+          (finalObj.animations && finalObj.animations.some(a => (a.frames && a.frames.length > 0) || a.gifUrl));
+        if (_hasLocalTex) _applyObjImgUrl(finalObj);
+      }
     }
     if (data.actors)    { STATE.actors = data.actors;        if(typeof renderActorLib  ==='function') renderActorLib(); }
     if (data.rules)     { RULES.length=0;     data.rules.forEach(r=>RULES.push(r)); }
@@ -16253,39 +16303,45 @@ function _applyProjectData(data, _fromCD) {
 
     // Si llegamos de Co-Director, pedir via texture-request los assets que faltan
     // (aquellos marcados con _hasTexture:true pero sin url local)
-    if (_fromCD && window.CD && window.CD.socket && window.CD.connected) {
+    if (_fromCD && window.CD && window.CD.connected) {
+      const _cdSend = (msg) => {
+        msg._type   = 'texture-request';
+        msg.fromId  = window.CD.myPeerId;  // 'fromId' para que _handleMsg lo identifique
+        if (window.CD.isHost) {
+          window.CD._broadcastAll(msg);
+        } else if (window.CD._hostConn && window.CD._hostConn.open) {
+          try { window.CD._hostConn.send(msg); } catch(e) {}
+        }
+      };
       // Pedir assets con textura faltante
       (data.assets || []).forEach(a => {
         if (!a._hasTexture) return;
         const localAsset = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === a.id);
-        if (localAsset && localAsset.url && localAsset.url.length > 300) return; // ya la tenemos
-        // Pedir la textura al emisor del update
-        window.CD.socket.emit('texture-request', {
-          assetId: a.id,
-          sessionCode: window.CD.sessionCode,
-          fromId: window.CD.socket.id,
-        });
+        // Pedir si no tenemos la URL local o está vacía
+        if (localAsset && localAsset.url && localAsset.url.length > 300) return;
+        _cdSend({ assetId: a.id });
       });
 
       // Pedir texturas de objetos que necesiten imgUrl/spriteSheet/frames
       STATE.objects.forEach(o => {
         if (o._needsTexture) {
-          window.CD.socket.emit('texture-request', {
-            objId: o.id,
-            sessionCode: window.CD.sessionCode,
-            fromId: window.CD.socket.id,
-          });
+          _cdSend({ objId: o.id });
         }
-        // Verificar frames de animaciones vacíos
+        // Si el objeto tiene assetId pero sin imgUrl local, pedir el asset
+        if (!o.imgUrl && o.assetId) {
+          const localAsset = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === o.assetId);
+          if (!localAsset || !localAsset.url || localAsset.url.length <= 300) {
+            _cdSend({ assetId: o.assetId });
+          }
+        }
         if (o.animations) {
           o.animations.forEach((anim, animIdx) => {
+            if (anim._hasGif && (!anim.gifUrl || anim.gifUrl.length <= 300)) {
+              _cdSend({ objId: o.id, animIdx, isGif: true });
+            }
             if (anim._framesCount && (!anim.frames || anim.frames.length === 0)) {
               for (let fi = 0; fi < anim._framesCount; fi++) {
-                window.CD.socket.emit('texture-request', {
-                  objId: o.id, animIdx, frameIdx: fi,
-                  sessionCode: window.CD.sessionCode,
-                  fromId: window.CD.socket.id,
-                });
+                _cdSend({ objId: o.id, animIdx, frameIdx: fi });
               }
             }
           });
@@ -16501,7 +16557,8 @@ document.addEventListener('DOMContentLoaded', function initEtapa5() {
     _origDglClose();
     _origOpenProfileSelector();
   };
-  DGL.open();
+  // Abrir login DESPUÉS de que el splash termine (5200ms fade-out + 700ms transición = 5900ms)
+  setTimeout(() => DGL.open(), 5900);
 });
 
 
@@ -20232,16 +20289,14 @@ function dpSaveProfile() {
   dpSave();
   toast('✅ Perfil guardado');
 
-  // Si el Co-Director está conectado, re-emitir el perfil actualizado
-  // para que los demás vean el nombre/foto nuevo de inmediato
-  if (window.CD && window.CD.connected && window.CD.socket) {
+  // Si el Co-Director está conectado, reenviar perfil actualizado (PeerJS)
+  if (window.CD && window.CD.connected) {
     try {
-      window.CD.socket.emit('peer-profile', {
-        sessionCode: window.CD.sessionCode,
-        profile:     window.CD._getProfile(),
-        name:        window.CD._getProfile().name,
-      });
-      window.CD._refreshCards(); // actualizar tarjeta propia localmente
+      const profileMsg = { _type: 'peer-profile', _fromId: window.CD.myPeerId, name: window.CD._getProfile().name, profile: window.CD._getProfile() };
+      if (window.CD.isHost) { window.CD._broadcastAll(profileMsg); }
+      else if (window.CD._hostConn && window.CD._hostConn.open) { window.CD._hostConn.send(profileMsg); }
+      window.CD._peers[window.CD.myPeerId] = { name: profileMsg.name, profile: profileMsg.profile };
+      window.CD._renderDirectors();
     } catch(e) {}
   }
 
@@ -21009,7 +21064,6 @@ window.openWelcome = function() {
   <div class="dgl-shell">
     <div class="dgl-logo"><div class="dgl-logo-dot"></div>Director Gamer</div>
     <div>
-      <div class="dgl-title">Iniciar sesión</div>
       <div class="dgl-sub">Tu clave mantiene tus proyectos privados</div>
     </div>
 
@@ -21312,12 +21366,129 @@ function _applyProfileNamespace(uid) {
 
 
 <!-- ═══════════════════════════════════════════════════════
-     CO-DIRECTOR — Socket.io / Render
-     Diseño nuevo · Host elige el proyecto
+     CO-DIRECTOR — PeerJS (P2P, sin servidor propio)
+     Host genera ID · Guest se conecta directo
+     Sync bidireccional en tiempo real
 ═══════════════════════════════════════════════════════ -->
 
-<!-- socket.io desde CDN -->
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<!-- PeerJS desde CDN -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     FIREBASE SERVICE — window._SRV
+     100% Firestore — SIN Firebase Storage (plan Spark gratuito OK).
+     Las texturas base64 se guardan en documentos separados (chunks)
+     dentro de la subcolección dg_textures/{projectId}/chunks/
+     para evitar el límite de 1MB por documento de Firestore.
+═══════════════════════════════════════════════════════════════ -->
+<script type="module">
+  import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+  import { getFirestore, doc, setDoc, getDoc, getDocs,
+           collection, deleteDoc, query, orderBy, limit, writeBatch }
+    from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+  const DG_FIREBASE_CONFIG = {
+    apiKey:            "AIzaSyAmGX9jK4EjJh5DBLYueZezuvxy2zTmMXU",
+    authDomain:        "director-gamer.firebaseapp.com",
+    projectId:         "director-gamer",
+    storageBucket:     "director-gamer.firebasestorage.app",
+    messagingSenderId: "762351067208",
+    appId:             "1:762351067208:web:585526fd14c6d63303b87d",
+    measurementId:     "G-LQDZ6GJMKY"
+  };
+
+  const B64        = 300;
+  const CHUNK_SIZE = 700000;
+
+  function _extractTextures(data) {
+    const textureMap = {};
+    const clean      = JSON.parse(JSON.stringify(data));
+    function _grab(obj, prop, key) {
+      if (obj[prop] && obj[prop].length > B64) { textureMap[key]=obj[prop]; obj[prop]=`__TEX__:${key}`; }
+    }
+    (clean.assets||[]).forEach(a => {
+      _grab(a,'url',`a_${a.id}`);
+      if(a.frames) a.frames=a.frames.map((f,i)=>{ if(f&&f.length>B64){const k=`af_${a.id}_${i}`;textureMap[k]=f;return`__TEX__:${k}`;}return f;});
+    });
+    (clean.objects||[]).forEach(o => {
+      _grab(o,'imgUrl',`oi_${o.id}`); _grab(o,'gifUrl',`og_${o.id}`);
+      if(o.spriteSheet) _grab(o.spriteSheet,'url',`os_${o.id}`);
+      if(o.animations) o.animations.forEach((anim,ai)=>{
+        _grab(anim,'gifUrl',`oag_${o.id}_${ai}`);
+        if(anim.frames) anim.frames=anim.frames.map((f,fi)=>{ if(f&&f.length>B64){const k=`oaf_${o.id}_${ai}_${fi}`;textureMap[k]=f;return`__TEX__:${k}`;}return f;});
+      });
+    });
+    return { clean, textureMap };
+  }
+
+  async function _saveTextures(db, projectId, textureMap) {
+    const entries=Object.entries(textureMap); if(!entries.length) return;
+    const chunksCol=collection(db,'dg_textures',projectId,'chunks');
+    let cur={},sz=0,idx=0; const batch=writeBatch(db);
+    const flush=()=>{ if(!Object.keys(cur).length) return; batch.set(doc(chunksCol,String(idx)),{_data:cur}); idx++;cur={};sz=0; };
+    for(const [k,v] of entries){ const s=k.length+v.length+10; if(sz+s>CHUNK_SIZE) flush(); cur[k]=v;sz+=s; }
+    flush(); await batch.commit();
+    console.log(`[DG Firebase] ${entries.length} textura(s) en ${idx} chunk(s)`);
+  }
+
+  async function _loadTextures(db, projectId) {
+    const map={};
+    try{ const snap=await getDocs(collection(db,'dg_textures',projectId,'chunks')); snap.forEach(d=>Object.assign(map,d.data()._data||{})); }catch(e){console.warn('[DG Firebase] Sin texturas:',e.message);}
+    return map;
+  }
+
+  function _restoreTextures(data, map) {
+    return JSON.parse(JSON.stringify(data).replace(/"__TEX__:([^"]+)"/g,(_,k)=>map[k]?JSON.stringify(map[k]):'""'));
+  }
+
+  let _app,_db;
+  try { _app=initializeApp(DG_FIREBASE_CONFIG); _db=getFirestore(_app); console.log('[DG Firebase] Firestore listo (plan Spark)'); }
+  catch(e){ console.error('[DG Firebase] Error init:',e); }
+
+  window._SRV = {
+    async saveProject(data,silent=false) {
+      if(!_db) throw new Error('Firestore no inicializado');
+      const projectId=window._CD_currentProjectId||('dg_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2));
+      try {
+        const {clean,textureMap}=_extractTextures(data);
+        const texCount=Object.keys(textureMap).length;
+        await Promise.all([
+          setDoc(doc(_db,'dg_projects',projectId),{...clean,_projectId:projectId,_savedAt:new Date().toISOString(),_userId:window._CD_userId||'anon',_username:window._DG_USERNAME||'anon',_texCount:texCount}),
+          texCount>0?_saveTextures(_db,projectId,textureMap):Promise.resolve()
+        ]);
+        if(!silent) console.log('[DG Firebase] Guardado:',projectId);
+        if(typeof toast!=='undefined') toast('☁️ Guardado en Firebase');
+        return {id:projectId,projectId};
+      } catch(err) {
+        console.error('[DG Firebase] Error guardar:',err);
+        if(typeof toast!=='undefined') toast('⚠️ Error Firebase: '+(err.message||err),4000);
+        throw err;
+      }
+    },
+    async loadProject(id) {
+      if(!_db) throw new Error('Firestore no inicializado');
+      const snap=await getDoc(doc(_db,'dg_projects',id));
+      if(!snap.exists()){console.warn('[DG Firebase] No encontrado:',id);return null;}
+      const data=snap.data();
+      if(data._texCount>0){ const map=await _loadTextures(_db,id); return _restoreTextures(data,map); }
+      return data;
+    },
+    async listProjects() {
+      if(!_db) return [];
+      try {
+        const q=query(collection(_db,'dg_projects'),orderBy('_savedAt','desc'),limit(50));
+        const snap=await getDocs(q);
+        return snap.docs.map(d=>({id:d.id,name:d.data().projectName||d.id,savedAt:d.data()._savedAt||''}));
+      } catch(e){return[];}
+    },
+    async clearProjects() {
+      if(!_db) return;
+      const snap=await getDocs(collection(_db,'dg_projects'));
+      await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
+    }
+  };
+  console.log('[DG Firebase] window._SRV listo (solo Firestore)');
+</script>
 
 <style>
 .cd-topbar-btn {
@@ -21361,16 +21532,6 @@ function _applyProfileNamespace(uid) {
 .cd-input:focus{border-color:#a855f7;box-shadow:0 0 0 3px rgba(168,85,247,.15);}
 .cd-hint{font-size:10px;color:rgba(196,180,214,.4);margin-top:3px;}
 
-.cd-proj-list{display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto;}
-.cd-proj-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(139,92,246,.12);cursor:pointer;transition:all .15s;}
-.cd-proj-item:hover{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.3);}
-.cd-proj-item.selected{background:rgba(139,92,246,.15);border-color:#a855f7;}
-.cd-proj-icon{font-size:16px;flex-shrink:0;}
-.cd-proj-info{flex:1;min-width:0;}
-.cd-proj-name{font-size:12px;font-weight:600;color:#e9d5ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.cd-proj-date{font-size:10px;color:rgba(196,180,214,.45);}
-.cd-proj-check{color:#4ade80;font-weight:700;font-size:14px;}
-
 .cd-status{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.2);border-radius:8px;font-size:11.5px;color:rgba(196,180,214,.7);}
 .cd-status-dot{width:8px;height:8px;border-radius:50%;background:rgba(196,180,214,.3);flex-shrink:0;}
 .cd-status-dot.green{background:#4ade80;box-shadow:0 0 6px #4ade80;}
@@ -21378,7 +21539,7 @@ function _applyProfileNamespace(uid) {
 .cd-status-dot.red{background:#ea4335;box-shadow:0 0 6px #ea4335;}
 
 .cd-code-box{background:rgba(0,0,0,.3);border:1.5px solid rgba(139,92,246,.35);border-radius:14px;padding:14px 18px;display:flex;align-items:center;gap:12px;}
-.cd-code-val{font-family:'Roboto Mono',monospace;font-size:24px;font-weight:700;color:#c084fc;letter-spacing:6px;flex:1;}
+.cd-code-val{font-family:'Roboto Mono',monospace;font-size:11px;font-weight:700;color:#c084fc;letter-spacing:1px;flex:1;word-break:break-all;}
 .cd-copy-btn{background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.4);border-radius:8px;color:#c084fc;font-size:11px;font-weight:600;padding:6px 12px;cursor:pointer;white-space:nowrap;transition:all .15s;}
 .cd-copy-btn:hover{background:rgba(139,92,246,.35);}
 
@@ -21408,7 +21569,7 @@ function _applyProfileNamespace(uid) {
       <div class="cd-header-glow">🎬</div>
       <div class="cd-header-text">
         <h2>Co-Director</h2>
-        <p>Colaboración en tiempo real &middot; Socket.io</p>
+        <p>Colaboración P2P · PeerJS · Sin servidor</p>
       </div>
       <button class="cd-header-close" onclick="CD.close()">✕</button>
     </div>
@@ -21416,12 +21577,11 @@ function _applyProfileNamespace(uid) {
     <!-- PANE SETUP -->
     <div id="cd-pane-setup">
       <div class="cd-body">
-
         <div class="cd-mode-row">
           <div class="cd-mode-card active" id="cd-card-host" onclick="CD.selectMode('host')">
             <div class="cd-mode-icon">👑</div>
             <div class="cd-mode-title">Ser Host</div>
-            <div class="cd-mode-desc">Elegís el proyecto y compartís el código</div>
+            <div class="cd-mode-desc">Generás un código y compartís el canvas</div>
           </div>
           <div class="cd-mode-card" id="cd-card-join" onclick="CD.selectMode('join')">
             <div class="cd-mode-icon">🔗</div>
@@ -21435,24 +21595,11 @@ function _applyProfileNamespace(uid) {
           <input class="cd-input" id="cd-my-name" placeholder="Director…">
         </div>
 
-        <div class="cd-field">
-          <div class="cd-label">URL del servidor</div>
-          <input class="cd-input" id="cd-server-url" placeholder="https://tu-app.onrender.com" style="font-size:12px;" oninput="CD._onUrlChange(this.value)">
-          <div class="cd-hint">Tu servidor de Render · Se guarda automáticamente</div>
-        </div>
-
-        <div id="cd-host-section">
-          <div class="cd-label" style="margin-bottom:6px;">Proyecto a compartir</div>
-          <div class="cd-proj-list" id="cd-proj-list">
-            <div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">Ingresá la URL del servidor para ver proyectos</div>
-          </div>
-          <button onclick="CD._loadProjects()" style="margin-top:6px;background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.25);border-radius:6px;color:#c084fc;font-size:11px;padding:5px 12px;cursor:pointer;width:100%;">↻ Recargar proyectos</button>
-        </div>
-
         <div id="cd-join-section" style="display:none;">
           <div class="cd-field">
-            <div class="cd-label">Código de sesión</div>
-            <input class="cd-input" id="cd-join-code" placeholder="XXXXXX" maxlength="10" style="text-transform:uppercase;letter-spacing:4px;text-align:center;font-size:20px;">
+            <div class="cd-label">Código del host</div>
+            <input class="cd-input" id="cd-join-code" placeholder="Pegá el código aquí" style="font-size:12px;letter-spacing:1px;">
+            <div class="cd-hint">El código que te envió el host</div>
           </div>
         </div>
 
@@ -21460,7 +21607,6 @@ function _applyProfileNamespace(uid) {
           <div class="cd-status-dot" id="cd-status-dot"></div>
           <span id="cd-status-text">Listo</span>
         </div>
-
       </div>
       <div class="cd-footer">
         <button class="cd-btn secondary" onclick="CD.close()">Cancelar</button>
@@ -21471,30 +21617,25 @@ function _applyProfileNamespace(uid) {
     <!-- PANE CONECTADO -->
     <div id="cd-pane-connected" style="display:none;">
       <div class="cd-body">
-
         <div id="cd-code-display" style="display:none;">
-          <div class="cd-label" style="margin-bottom:6px;">Código de sesión — compartilo</div>
+          <div class="cd-label" style="margin-bottom:6px;">Tu código — compartilo con los co-directores</div>
           <div class="cd-code-box">
             <div class="cd-code-val" id="cd-code-val">——</div>
             <button class="cd-copy-btn" onclick="CD.copyCode()">📋 Copiar</button>
           </div>
         </div>
-
         <div>
           <div class="cd-label" style="margin-bottom:8px;">Directores en sesión</div>
           <div class="cd-directors-grid" id="cd-directors-grid"></div>
         </div>
-
         <div class="cd-status">
           <div class="cd-status-dot green" id="cd-status-dot2"></div>
           <span id="cd-status-text2">Sesión activa</span>
         </div>
-
         <div>
           <div class="cd-label" style="margin-bottom:4px;">Log</div>
           <div class="cd-log" id="cd-log"></div>
         </div>
-
       </div>
       <div class="cd-footer">
         <button class="cd-btn secondary" onclick="CD.close()">Cerrar</button>
@@ -21506,170 +21647,63 @@ function _applyProfileNamespace(uid) {
 </div>
 
 <script>
-/* ══════════════════════════════════════════════════
-   _SRV  —  capa servidor via socket
-══════════════════════════════════════════════════ */
-window._SRV = {
-  _socket: null,
-  _pending: {},
+/* ══════════════════════════════════════════════════════════════
+   CD — Co-Director P2P via PeerJS
+   ──────────────────────────────────────────────────────────────
+   ARQUITECTURA STAR (todos hablan con el host):
 
-  _attach(s) {
-    this._socket = s;
-    s.on('srv-response', ({ reqId, ok, data, error }) => {
-      const p = this._pending[reqId];
-      if (!p) return;
-      clearTimeout(p.timer);
-      delete this._pending[reqId];
-      ok ? p.resolve(data) : p.reject(new Error(error || 'srv-error'));
-    });
-  },
+   HOST:
+     - Crea Peer, recibe ID
+     - Acepta conexiones de guests
+     - Al conectar cada guest → envía snapshot completo del canvas
+     - Recibe updates de cualquier guest → aplica localmente + relay a todos los demás guests
+     - Detecta cambios propios → envía a todos los guests
 
-  _call(event, payload) {
-    return new Promise((resolve, reject) => {
-      if (!this._socket || !this._socket.connected) { reject(new Error('Sin conexión')); return; }
-      const reqId = Math.random().toString(36).slice(2);
-      this._pending[reqId] = {
-        resolve, reject,
-        timer: setTimeout(() => { delete this._pending[reqId]; reject(new Error('Timeout')); }, 12000)
-      };
-      this._socket.emit(event, { ...payload, reqId });
-    });
-  },
+   GUEST:
+     - Crea Peer, se conecta al ID del host
+     - Recibe snapshot inicial del canvas
+     - Detecta cambios propios → envía solo al host
+     - Recibe updates del host (propios re-enviados o de otros guests)
 
-  saveProject(data, silent) {
-    const userId = window._CD_userId || 'anon';
-    this._call('srv-save', { userId, data })
-      .then(() => { if (!silent) toast('☁️ Guardado en servidor'); })
-      .catch(e => toast('⚠ Error al guardar: ' + e.message));
-  },
-  listProjects()  { return this._call('srv-list',  { userId: window._CD_userId || 'anon' }); },
-  loadProject(id) { return this._call('srv-load',  { userId: window._CD_userId || 'anon', id }); },
-  clearProjects() { return this._call('srv-clear', { userId: window._CD_userId || 'anon' }); },
-};
-
-/* ══════════════════════════════════════════════════
-   CD  —  Co-Director
-══════════════════════════════════════════════════ */
+   DETECCIÓN DE CAMBIOS:
+     - MutationObserver sobre #world-canvas (cambios DOM = objetos movidos/editados)
+     - Patch de STATE.objects con Proxy para detectar cualquier mutación del estado
+     - mouseup/pointerup en el canvas
+     - Input events en propiedades del objeto seleccionado
+     - Throttle 150ms para no saturar la conexión
+══════════════════════════════════════════════════════════════ */
 const CD = {
-  socket:        null,
+  peer:          null,
+  myPeerId:      null,
   connected:     false,
   mode:          'host',
   myName:        'Director',
-  sessionCode:   null,
   isHost:        false,
-  selectedProjId: null,
-  _peers:        {},
+  _conns:        {},        // host: { peerId → DataConnection }
+  _hostConn:     null,      // guest: DataConnection al host
+  _peers:        {},        // { peerId: { name, profile, role } }
   _cursors:      {},
-  _broadcasting: false,
-  _cmdPatchDone: false,
+  _broadcasting: false,     // true mientras aplicamos update remoto (evita loop)
+  _syncPatched:  false,
+  _syncTimer:    null,
+  _mutObs:       null,
 
-  /* ── abrir ── */
+  /* ════════════ ABRIR / CERRAR ════════════ */
   open() {
     const name = this._getProfile().name || 'Director';
-    const inp  = document.getElementById('cd-my-name');
+    const inp = document.getElementById('cd-my-name');
     if (inp) inp.value = name;
     this.myName = name;
-
-    // cargar URL guardada
-    const saved = localStorage.getItem('dg_server_url') || '';
-    if (saved) {
-      window._DG_SERVER_URL = saved;
-      const el = document.getElementById('cd-server-url');
-      if (el) el.value = saved;
-    }
-
     document.getElementById('cd-overlay').classList.add('open');
-
-    // cargar proyectos si ya hay URL
-    if (window._DG_SERVER_URL) this._loadProjects();
   },
-
   close() { document.getElementById('cd-overlay').classList.remove('open'); },
-
-  _onUrlChange(val) {
-    const v = val.trim();
-    window._DG_SERVER_URL = v || '';
-    try { v ? localStorage.setItem('dg_server_url', v) : localStorage.removeItem('dg_server_url'); } catch(e) {}
-    // Limpiar lista para que recargue con nueva URL
-    const list = document.getElementById('cd-proj-list');
-    if (list) list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">↻ Cargando…</div>';
-    clearTimeout(this._urlDebounce);
-    if (v) this._urlDebounce = setTimeout(() => this._loadProjects(), 800);
-  },
-
-  /* ── lista de proyectos ── */
-  _loadProjects() {
-    const list = document.getElementById('cd-proj-list');
-    if (!list) return;
-    const url = (window._DG_SERVER_URL || '').trim();
-    if (!url) {
-      list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">Ingresá la URL del servidor</div>';
-      return;
-    }
-    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">⏳ Conectando…</div>';
-
-    this._getTempSocket(url, (err, sock) => {
-      if (err) {
-        list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.7);text-align:center;padding:10px;">⚠ Sin conexión: ' + err + '</div>';
-        return;
-      }
-      window._SRV._attach(sock);
-      window._SRV.listProjects().then(projects => {
-        if (!projects || !projects.length) {
-          list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">Sin proyectos guardados</div>';
-          return;
-        }
-        list.innerHTML = projects.map(p => {
-          const d = p.savedAt ? new Date(p.savedAt).toLocaleDateString('es') : '';
-          return '<div class="cd-proj-item" data-id="' + p.id + '" onclick="CD.selectProject(\'' + p.id + '\',\'' + (p.projectName||'').replace(/'/g,"\\'") + '\')">' +
-            '<div class="cd-proj-icon">☁️</div>' +
-            '<div class="cd-proj-info"><div class="cd-proj-name">' + (p.projectName||'Sin título') + '</div><div class="cd-proj-date">' + d + '</div></div>' +
-            '<div class="cd-proj-check" id="cdpc-' + p.id + '" style="display:none">✓</div></div>';
-        }).join('');
-      }).catch(e => {
-        list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.7);text-align:center;padding:10px;">⚠ Error: ' + e.message + '</div>';
-      });
-    });
-  },
-
-  /* Obtener o reusar socket temporal para listar */
-  _getTempSocket(url, cb) {
-    if (this._tempSock && this._tempSock.connected && this._tempSockUrl === url) {
-      cb(null, this._tempSock); return;
-    }
-    if (this._tempSock) { this._tempSock.disconnect(); this._tempSock = null; }
-    let sock;
-    try { sock = io(url, { transports: ['websocket','polling'], timeout: 8000 }); }
-    catch(e) { cb(e.message); return; }
-    this._tempSock    = sock;
-    this._tempSockUrl = url;
-    const done = (err) => {
-      sock.off('connect', onOk);
-      sock.off('connect_error', onErr);
-      cb(err, err ? null : sock);
-    };
-    const onOk  = () => done(null);
-    const onErr = (e) => done(e && e.message ? e.message : 'Error de red');
-    sock.once('connect',       onOk);
-    sock.once('connect_error', onErr);
-  },
-
-  selectProject(id, name) {
-    this.selectedProjId = id;
-    document.querySelectorAll('.cd-proj-item').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
-    document.querySelectorAll('.cd-proj-check').forEach(el => el.style.display = 'none');
-    const ck = document.getElementById('cdpc-' + id);
-    if (ck) ck.style.display = 'block';
-    this._setStatus('yellow', '"' + (name||id) + '" seleccionado ✓');
-  },
 
   selectMode(mode) {
     this.mode = mode;
     document.getElementById('cd-card-host').classList.toggle('active', mode === 'host');
     document.getElementById('cd-card-join').classList.toggle('active', mode === 'join');
-    document.getElementById('cd-host-section').style.display = mode === 'host' ? 'block' : 'none';
-    document.getElementById('cd-join-section').style.display = mode === 'join'  ? 'block' : 'none';
-    document.getElementById('cd-action-btn').textContent     = mode === 'host'  ? '✦ Crear sesión' : '🔗 Unirse';
+    document.getElementById('cd-join-section').style.display = mode === 'join' ? 'block' : 'none';
+    document.getElementById('cd-action-btn').textContent     = mode === 'host' ? '✦ Crear sesión' : '🔗 Unirse';
     this._setStatus('', 'Listo');
   },
 
@@ -21680,200 +21714,699 @@ const CD = {
     else                      this._joinSession();
   },
 
+  /* ════════════ HOST ════════════ */
   _createSession() {
-    if (!this.selectedProjId) { this._setStatus('yellow', 'Seleccioná un proyecto primero'); return; }
-    this._connect(() => {
-      const code = this._genCode();
-      this.sessionCode = code;
+    this._setStatus('yellow', 'Iniciando PeerJS…');
+    this._initPeer(() => {
       this.isHost = true;
-      this.socket.emit('create-session', { code, name: this.myName, profile: this._getProfile() });
+      this.connected = true;
+      this._peers[this.myPeerId] = { name: this.myName, profile: this._getProfile(), role: 'Host' };
+
+      this.peer.on('connection', conn => this._onGuestConnect(conn));
+
+      this._showConnected(true);
+      this._setStatus2('green', 'Esperando co-directores…');
+      this._log('✅ Sesión lista · Código: ' + this.myPeerId);
+      this._renderDirectors();
+      this._updateTopBtn(true);
+      this._patchSync();
     });
   },
 
+  _onGuestConnect(conn) {
+    this._log('📡 Guest conectando: ' + conn.peer);
+    conn.on('open', () => {
+      this._conns[conn.peer] = conn;
+      this._log('🔌 Guest conectado: ' + conn.peer);
+
+      // 1) Enviar lista de peers actual
+      conn.send({ _type: 'peers-list', peers: this._peersList() });
+
+      // 2) Si hay Firebase disponible, guardar primero para tener ID actualizado
+      //    luego enviar ese ID al guest para que cargue directo desde Firebase
+      if (window._SRV && typeof window._SRV.saveProject === 'function') {
+        this._log('☁️ Guardando en Firebase antes de enviar al guest…');
+        const _saveData = _buildSaveDataFull();
+        const _saveP = window._SRV.saveProject(_saveData, true);
+        const _afterSave = (result) => {
+          if (result && (result.id || result.projectId)) {
+            window._CD_currentProjectId = result.id || result.projectId;
+          }
+          if (!window._CD_currentProjectId) window._CD_currentProjectId = _saveData.projectName;
+          if (conn.open) {
+            conn.send({ _type: 'load-from-firebase', fromId: this.myPeerId, projectId: window._CD_currentProjectId });
+            this._log('☁️ ID Firebase enviado al guest: ' + window._CD_currentProjectId);
+          }
+        };
+        if (_saveP && typeof _saveP.then === 'function') {
+          _saveP.then(_afterSave).catch(() => {
+            // Fallback: snapshot local
+            if (conn.open) this._sendSnapshotTo(conn);
+          });
+        } else {
+          // _SRV.saveProject no es async — usar ID que ya tenemos o fallback
+          setTimeout(() => _afterSave(null), 500);
+        }
+      } else {
+        // Sin Firebase — snapshot local
+        this._sendSnapshotTo(conn);
+      }
+    });
+
+    conn.on('data', data => {
+      if (!data || !data._type) return;
+      this._handleMsg(data, conn.peer);
+    });
+
+    conn.on('close', () => {
+      this._log('👋 Guest desconectado: ' + conn.peer);
+      delete this._conns[conn.peer];
+      delete this._peers[conn.peer];
+      this._renderDirectors();
+      this._broadcastAll({ _type: 'peers-list', peers: this._peersList() });
+    });
+
+    conn.on('error', e => this._log('❌ Error guest ' + conn.peer + ': ' + (e.message||e.type||e)));
+  },
+
+  /* ════════════ GUEST ════════════ */
   _joinSession() {
-    const code = (document.getElementById('cd-join-code').value || '').trim().toUpperCase();
-    if (!code) { this._setStatus('yellow', 'Ingresá un código'); return; }
-    this._connect(() => {
-      this.sessionCode = code;
-      this.isHost = false;
-      this.socket.emit('join-session', { code, name: this.myName, profile: this._getProfile() });
-    });
-  },
-
-  /* ── conexión principal ── */
-  _connect(cb) {
-    const url = (window._DG_SERVER_URL || '').trim();
-    if (!url) { this._setStatus('red', 'Ingresá la URL del servidor'); return; }
+    const hostId = (document.getElementById('cd-join-code').value || '').trim();
+    if (!hostId) { this._setStatus('yellow', 'Ingresá el código del host'); return; }
 
     this._setStatus('yellow', 'Conectando…');
+    this._initPeer(() => {
+      this.isHost = false;
+      this._log('🔌 Conectando al host: ' + hostId);
 
-    // Si el socket temporal ya está conectado a la misma URL, lo promovemos
-    if (this._tempSock && this._tempSock.connected && this._tempSockUrl === url) {
-      this.socket = this._tempSock;
-      this._tempSock = null;
-      window._SRV._attach(this.socket);
-      this._bindSessionEvents();
-      this._log('🔌 Conectado (reutilizado)');
-      cb();
+      let conn;
+      try {
+        conn = this.peer.connect(hostId, { reliable: true, serialization: 'json' });
+      } catch(e) {
+        this._setStatus('red', 'Error al conectar: ' + e.message);
+        return;
+      }
+      this._hostConn = conn;
+
+      const timeoutId = setTimeout(() => {
+        if (!this.connected) {
+          this._setStatus('red', 'Timeout — ¿código correcto? ¿Host conectado?');
+          this._log('⏱ Timeout al conectar');
+        }
+      }, 15000);
+
+      conn.on('open', () => {
+        clearTimeout(timeoutId);
+        this.connected = true;
+        this._peers[this.myPeerId] = { name: this.myName, profile: this._getProfile(), role: 'Co-Director' };
+
+        // Presentarse al host
+        conn.send({ _type: 'hello', fromId: this.myPeerId, name: this.myName, profile: this._getProfile() });
+
+        this._showConnected(false);
+        this._setStatus2('green', 'Conectado al host');
+        this._log('✅ Conectado — esperando canvas…');
+        this._updateTopBtn(true);
+        this._patchSync();
+      });
+
+      conn.on('data', data => {
+        if (!data || !data._type) return;
+        this._handleMsg(data, hostId);
+      });
+
+      conn.on('close', () => {
+        this._log('🔌 Host desconectado');
+        if (this.connected) this._onDisconnect();
+      });
+
+      conn.on('error', e => {
+        const msg = e.type || e.message || String(e);
+        this._setStatus('red', 'Error: ' + msg);
+        this._log('❌ ' + msg);
+        if (msg === 'peer-unavailable') {
+          this._setStatus('red', 'Host no encontrado — ¿código correcto?');
+        }
+      });
+    });
+  },
+
+  /* ════════════ HANDLER UNIFICADO DE MENSAJES ════════════ */
+  _handleMsg(data, fromId) {
+    switch (data._type) {
+
+      case 'hello':
+        // Solo el host recibe esto
+        if (!this._peers[data.fromId]) this._peers[data.fromId] = {};
+        this._peers[data.fromId].name    = data.name    || 'Director';
+        this._peers[data.fromId].profile = data.profile || {};
+        this._peers[data.fromId].role    = 'Co-Director';
+        this._renderDirectors();
+        this._broadcastAll({ _type: 'peers-list', peers: this._peersList() });
+        this._log('👤 ' + (data.name || data.fromId) + ' se unió');
+        toast('👤 ' + (data.name || 'Director') + ' se unió a la sesión');
+        break;
+
+case 'firebase-updated': {
+        // Host guardó en Firebase — recargar para obtener texturas actualizadas
+        if (!data.projectId || !window._SRV || typeof window._SRV.loadProject !== 'function') break;
+        window._SRV.loadProject(data.projectId).then(fbData => {
+          if (!fbData) return;
+          this._broadcasting = true;
+          try { _applyProjectData(fbData, true); } catch(e) { console.error(e); }
+          this._broadcasting = false;
+          this._log('☁️ Canvas actualizado desde Firebase');
+        }).catch(() => {});
+        break;
+      }
+
+      case 'load-from-firebase': {
+        // Host nos dice que cargamos el proyecto directamente desde Firebase
+        if (!data.projectId || !window._SRV || typeof window._SRV.loadProject !== 'function') break;
+        this._log('☁️ Cargando desde Firebase: ' + data.projectId);
+        toast('☁️ Cargando texturas desde Firebase…');
+        window._SRV.loadProject(data.projectId).then(fbData => {
+          if (!fbData) { this._log('⚠ Firebase: proyecto no encontrado'); return; }
+          this._broadcasting = true;
+          try { _applyProjectData(fbData, true); } catch(e) { console.error(e); }
+          this._broadcasting = false;
+          this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
+          toast('✅ Canvas y texturas cargados');
+        }).catch(err => {
+          this._log('⚠ Firebase error: ' + (err.message || err));
+        });
+        break;
+      }
+
+      case 'snapshot-chunk': {
+        // Ensamblar snapshot grande que llegó en partes
+        if (!this._snapBuf) this._snapBuf = {};
+        const sid = data._txId;
+        if (!this._snapBuf[sid]) this._snapBuf[sid] = { chunks: new Array(data._total), got: 0 };
+        const sbuf = this._snapBuf[sid];
+        if (sbuf.chunks[data._idx] === undefined) { sbuf.chunks[data._idx] = data._chunk; sbuf.got++; }
+        if (sbuf.got >= data._total) {
+          delete this._snapBuf[sid];
+          try {
+            const parsed = JSON.parse(sbuf.chunks.join(''));
+            this._handleMsg(parsed, fromId); // re-procesar como snapshot normal
+          } catch(e) { this._log('⚠ Error ensamblando snapshot: ' + e.message); }
+        }
+        break;
+      }
+
+      case 'snapshot':
+        // Guest recibe snapshot inicial del canvas (con texturas embebidas)
+        this._broadcasting = true;
+        try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
+        this._broadcasting = false;
+        this._log('📂 Canvas recibido del host');
+        toast('📂 Canvas cargado desde el host');
+        // Retry: pedir texturas que no llegaron tras 4 segundos
+        clearTimeout(this._texRetryTimer);
+        this._texRetryTimer = setTimeout(() => {
+          if (!this.connected) return;
+          const missing = (STATE.objects || []).filter(o =>
+            (o._needsTexture && !o.imgUrl && !o.spriteSheet?.url) ||
+            (!o.imgUrl && o.assetId && (() => {
+              const a = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === o.assetId);
+              return !a || !a.url || a.url.length <= 300;
+            })())
+          );
+          if (missing.length > 0) {
+            this._log('🔄 Reintentando ' + missing.length + ' texturas faltantes…');
+            missing.forEach(o => {
+              const msg = { _type: 'texture-request', fromId: this.myPeerId, objId: o.id };
+              if (this._hostConn && this._hostConn.open) try { this._hostConn.send(msg); } catch(e) {}
+            });
+          }
+        }, 4000);
+        break;
+
+      case 'canvas-update':
+        // Alguien (host o guest via relay) envió un update
+        if (data.fromId === this.myPeerId) break; // es mío, ignorar
+        this._broadcasting = true;
+        try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
+        this._broadcasting = false;
+        // Si soy host, relay a todos los demás guests (excepto quien lo envió)
+        if (this.isHost) {
+          this._broadcastExcept(fromId, data);
+        }
+        break;
+
+      case 'peers-list':
+        (data.peers || []).forEach(p => {
+          if (p.id === this.myPeerId) return; // no sobreescribir el propio
+          if (!this._peers[p.id]) this._peers[p.id] = {};
+          Object.assign(this._peers[p.id], p);
+        });
+        this._renderDirectors();
+        break;
+
+      case 'peer-profile':
+        if (!this._peers[data.fromId]) this._peers[data.fromId] = {};
+        Object.assign(this._peers[data.fromId], { name: data.name, profile: data.profile });
+        this._renderDirectors();
+        if (this.isHost) this._broadcastExcept(fromId, data); // relay
+        break;
+
+      case 'cursor-move':
+        this._updateCursor(data.fromId, data.name, data.x, data.y);
+        if (this.isHost) this._broadcastExcept(fromId, data); // relay
+        break;
+
+      /* ── Protocolo de texturas binario (igual que FileDrop) ── */
+      case 'tex-meta': {
+        if (!this._txBuf) this._txBuf = {};
+        this._txBuf[data._txId] = {
+          meta:   Object.fromEntries(Object.entries(data).filter(([k]) => !k.startsWith('_'))),
+          mime:   data._mime || 'image/png',
+          total:  data._total,
+          chunks: new Array(data._total),
+          got:    0,
+        };
+        break;
+      }
+
+      case 'tex-bin': {
+        if (!this._txBuf) break;
+        const buf = this._txBuf[data._txId];
+        if (!buf) break;
+        buf.chunks[data._idx] = data._data;
+        buf.got++;
+        if (buf.got === buf.total) {
+          // Ensamblar todos los chunks en un único ArrayBuffer
+          const totalBytes = buf.chunks.reduce((s, c) => s + c.byteLength, 0);
+          const merged = new Uint8Array(totalBytes);
+          let off = 0;
+          buf.chunks.forEach(c => { merged.set(new Uint8Array(c), off); off += c.byteLength; });
+          delete this._txBuf[data._txId];
+          const dataUrl = this._bufferToB64(merged.buffer, buf.mime);
+          this._applyTextureResponse(Object.assign({}, buf.meta, { url: dataUrl }));
+        }
+        break;
+      }
+
+      /* ── Pedido de textura — solo el host responde ── */
+      case 'texture-request': {
+        if (!this.isHost) break;
+        const _rc = this._conns[fromId];
+        if (!_rc || !_rc.open) break;
+        if (data.assetId) {
+          const _a = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === data.assetId);
+          if (_a && _a.url) this._sendTexture(_rc, { assetId: data.assetId }, _a.url);
+        } else if (data.objId && data.animIdx === undefined) {
+          const _o = STATE.objects.find(x => x.id === data.objId);
+          if (_o) {
+            let _u = _o.imgUrl || (_o.spriteSheet && _o.spriteSheet.url);
+            if (!_u && _o.assetId) { const _a2 = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === _o.assetId); if (_a2) _u = _a2.url; }
+            if (_u) this._sendTexture(_rc, { objId: data.objId, isSprite: !!(_o.spriteSheet && _o.spriteSheet.url) }, _u);
+          }
+        } else if (data.objId && data.animIdx !== undefined) {
+          const _o2 = STATE.objects.find(x => x.id === data.objId);
+          if (_o2 && _o2.animations && _o2.animations[data.animIdx]) {
+            const _anim = _o2.animations[data.animIdx];
+            if (data.isGif) {
+              const _gif = _anim.gifUrl;
+              if (_gif) this._sendTexture(_rc, { objId: data.objId, animIdx: data.animIdx, isGif: true }, _gif);
+            } else {
+              const _fu = (_anim.frames || [])[data.frameIdx];
+              if (_fu) this._sendTexture(_rc, { objId: data.objId, animIdx: data.animIdx, frameIdx: data.frameIdx }, _fu);
+            }
+          }
+        }
+        break;
+      }
+
+      /* ── tex-chunk — protocolo principal de transferencia de texturas ── */
+      case 'tex-chunk': {
+        if (!this._txBuf) this._txBuf = {};
+        const txId = data._txId;
+        if (!this._txBuf[txId]) this._txBuf[txId] = { chunks: new Array(data._chunkTotal), got: 0, meta: {} };
+        const lbuf = this._txBuf[txId];
+        Object.keys(data).forEach(k => { if (!k.startsWith('_')) lbuf.meta[k] = data[k]; });
+        if (lbuf.chunks[data._chunkIdx] === undefined) {
+          lbuf.chunks[data._chunkIdx] = data._chunk;
+          lbuf.got++;
+        }
+        if (lbuf.got >= data._chunkTotal) {
+          const fullUrl = lbuf.chunks.join('');
+          delete this._txBuf[txId];
+          this._applyTextureResponse(Object.assign({}, lbuf.meta, { url: fullUrl }));
+        }
+        break;
+      }
+
+      case 'texture-response':
+        this._applyTextureResponse(data);
+        break;
+    }
+  },
+
+  /* Aplica una textura recibida (url ya ensamblada) al estado local */
+  _applyTextureResponse(tr) {
+    if (!tr || !tr.url) return;
+    if (tr.assetId) {
+      const ta = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === tr.assetId);
+      if (ta) {
+        ta.url = tr.url;
+        (STATE.objects || []).forEach(o => {
+          if (o.assetId === tr.assetId) {
+            // No sobreescribir imgUrl si el objeto ya tiene una directa
+            if (!o.imgUrl) o.imgUrl = tr.url;
+            requestAnimationFrame(() => {
+              if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
+            });
+          }
+        });
+        if (typeof renderAssetGrid === 'function') renderAssetGrid();
+      }
+    } else if (tr.objId && tr.animIdx === undefined) {
+      const to = STATE.objects.find(x => x.id === tr.objId);
+      if (to) {
+        if (tr.isSprite) { if (!to.spriteSheet) to.spriteSheet = {}; to.spriteSheet.url = tr.url; }
+        else { to.imgUrl = tr.url; }
+        requestAnimationFrame(() => {
+          if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(to);
+        });
+      }
+    } else if (tr.objId && tr.animIdx !== undefined && tr.frameIdx !== undefined) {
+      const to2 = STATE.objects.find(x => x.id === tr.objId);
+      if (to2 && to2.animations && to2.animations[tr.animIdx]) {
+        const tanim = to2.animations[tr.animIdx];
+        if (!tanim.frames) tanim.frames = [];
+        tanim.frames[tr.frameIdx] = tr.url;
+        tanim.frameMode = tanim.frameMode || 'frames';
+        const loaded = tanim.frames.filter(Boolean).length;
+        const expected = tanim._framesCount || tanim.frames.length;
+        if (loaded >= expected) {
+          if (typeof rebuildFramesGrid === 'function') rebuildFramesGrid(tr.objId, tr.animIdx);
+          if (typeof updateAnimBar === 'function') updateAnimBar(tr.objId, tr.animIdx);
+        }
+        if (tr.frameIdx === 0) {
+          to2._firstFrameUrl = tr.url;
+          if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(to2);
+        }
+      }
+    } else if (tr.objId && tr.animIdx !== undefined && tr.isGif) {
+      const to3 = STATE.objects.find(x => x.id === tr.objId);
+      if (to3 && to3.animations && to3.animations[tr.animIdx]) {
+        to3.animations[tr.animIdx].gifUrl = tr.url;
+        to3.animations[tr.animIdx].frameMode = 'gif';
+        if (typeof rebuildFramesGrid === 'function') rebuildFramesGrid(tr.objId, tr.animIdx);
+        if (typeof updateAnimBar === 'function') updateAnimBar(tr.objId, tr.animIdx);
+      }
+    }
+  },
+
+  /* ════════════ PEERJS INIT ════════════ */
+  _initPeer(cb) {
+    if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
+
+    try {
+      this.peer = new Peer({ debug: 0 });
+    } catch(e) {
+      this._setStatus('red', 'Error PeerJS: ' + e.message);
       return;
     }
 
-    // Descartar socket temporal si existe
-    if (this._tempSock) { this._tempSock.disconnect(); this._tempSock = null; }
-    if (this.socket)    { this.socket.disconnect(); this.socket = null; }
-
-    let sock;
-    try {
-      sock = io(url, { transports: ['websocket','polling'], timeout: 10000, reconnection: true, reconnectionAttempts: 4 });
-    } catch(e) { this._setStatus('red', 'Error: ' + e.message); return; }
-
-    this.socket = sock;
-    window._SRV._attach(sock);
-    this._bindSessionEvents();
-
-    sock.once('connect', () => {
-      this._log('🔌 Conectado a ' + url);
+    this.peer.on('open', id => {
+      this.myPeerId = id;
+      this._log('📡 PeerJS listo · ID: ' + id);
       cb();
     });
-    sock.on('connect_error', (e) => {
-      this._setStatus('red', 'Sin conexión: ' + (e.message || 'error de red'));
-      this._log('❌ ' + (e.message || 'connect_error'));
+
+    this.peer.on('error', e => {
+      const msg = e.type || e.message || String(e);
+      this._setStatus('red', 'PeerJS: ' + msg);
+      this._log('❌ PeerJS: ' + msg);
+    });
+
+    this.peer.on('disconnected', () => {
+      this._log('📡 Señalización perdida — reconectando…');
+      setTimeout(() => { if (this.peer && !this.peer.destroyed) this.peer.reconnect(); }, 2000);
     });
   },
 
-  _bindSessionEvents() {
-    const s = this.socket;
-    s.off('session-created'); s.off('session-joined'); s.off('error-msg');
-    s.off('peers-updated');   s.off('peer-profile');   s.off('project-load');
-    s.off('project-update');  s.off('cursor-move');    s.off('disconnect');
-
-    s.on('session-created', ({ code, peers }) => this._onSessionReady(code, peers));
-    s.on('session-joined',  ({ code, peers }) => this._onSessionReady(code, peers));
-    s.on('error-msg', msg => { this._setStatus('red', msg); this._log('❌ ' + msg); });
-
-    s.on('peers-updated', peers => {
-      const prev = Object.keys(this._peers).length;
-      this._mergePeers(peers);
-      if (s.id) this._peers[s.id] = { profile: this._getProfile(), name: this.myName };
-      this._renderDirectors(peers);
-      this._log('👥 ' + peers.length + ' director(es)');
-      if (this.isHost && peers.length > prev) {
-        setTimeout(() => this._sendProjectToRoom(), 300);
-        setTimeout(() => s.emit('peer-profile', { sessionCode: this.sessionCode, profile: this._getProfile(), name: this.myName }), 500);
+  /* ════════════ ENVIAR CANVAS ════════════ */
+  _sendSnapshotTo(conn) {
+    try {
+      // Si hay ID de proyecto en Firebase, decirle al guest que lo cargue directamente
+      // Esto es mucho más eficiente que transferir todo por PeerJS
+      const firebaseId = window._CD_currentProjectId || null;
+      if (firebaseId && window._SRV && typeof window._SRV.loadProject === 'function') {
+        conn.send({ _type: 'load-from-firebase', fromId: this.myPeerId, projectId: firebaseId });
+        this._log('☁️ Enviando ID de Firebase al guest: ' + firebaseId);
+        // También enviar snapshot local como fallback
       }
-      s.emit('peer-profile', { sessionCode: this.sessionCode, profile: this._getProfile(), name: this.myName });
-    });
-
-    s.on('peer-profile', ({ fromId, profile, name }) => {
-      if (!fromId || !profile) return;
-      if (!this._peers[fromId]) this._peers[fromId] = {};
-      this._peers[fromId].profile = profile;
-      this._peers[fromId].name    = profile.name || name || this._peers[fromId].name;
-      this._refreshCards();
-    });
-
-    s.on('project-load', data => {
-      if (!this.isHost) {
-        _applyProjectData(data, true);
-        this._log('📂 Proyecto recibido del host');
-        toast('📂 Proyecto cargado desde el host');
+      // Usar snapshot COMPLETO con todas las base64 embebidas
+      const payload = _buildSaveDataFull();
+      const fullMsg = JSON.stringify({ _type: 'snapshot', fromId: this.myPeerId, payload });
+      const CS = 60000; // 60KB por chunk
+      const total = Math.ceil(fullMsg.length / CS);
+      const txId = Math.random().toString(36).slice(2);
+      if (total === 1) {
+        // Mensaje chico: enviar directo
+        conn.send({ _type: 'snapshot', fromId: this.myPeerId, payload });
+      } else {
+        // Mensaje grande: chunkearlo como string
+        for (let i = 0; i < total; i++) {
+          const chunk = fullMsg.slice(i * CS, (i + 1) * CS);
+          ((idx, c) => setTimeout(() => {
+            if (conn.open) conn.send({ _type: 'snapshot-chunk', _txId: txId, _idx: idx, _total: total, _chunk: c });
+          }, idx * 40))(i, chunk);
+        }
+        this._log('📦 Snapshot grande: ' + total + ' chunks (' + Math.round(fullMsg.length/1024) + 'KB)');
       }
-    });
-
-    s.on('project-update', data => {
-      if (data._fromSocketId && data._fromSocketId === s.id) return;
-      this._broadcasting = true;
-      _applyProjectData(data, true);
-      if (!data._isDragUpdate) this._log('🔄 Canvas actualizado');
-      requestAnimationFrame(() => { this._broadcasting = false; });
-    });
-
-    s.on('cursor-move', ({ id, name, x, y }) => this._updateCursor(id, name, x, y));
-
-    s.on('disconnect', () => {
-      this._log('🔌 Desconectado');
-      if (this.connected) this._onDisconnect();
-    });
+    } catch(e) { this._log('⚠ Error enviando snapshot: ' + e.message); }
   },
 
-  /* ── sesión lista ── */
-  _onSessionReady(code, peers) {
-    this.connected   = true;
-    this.sessionCode = code;
+  /* ── Tamaño máximo de chunk de base64 por mensaje PeerJS (~12KB safe) ── */
+  _CHUNK_SIZE: 12000,
 
-    document.getElementById('cd-pane-setup').style.display     = 'none';
-    document.getElementById('cd-pane-connected').style.display = 'flex';
-    document.getElementById('cd-pane-connected').style.flexDirection = 'column';
-
-    if (this.isHost) {
-      document.getElementById('cd-code-display').style.display = 'block';
-      document.getElementById('cd-code-val').textContent       = code;
-    }
-
-    this._mergePeers(peers);
-    if (this.socket?.id) this._peers[this.socket.id] = { profile: this._getProfile(), name: this.myName };
-    this._renderDirectors(peers);
-    this._setStatus2('green', 'Sesión activa');
-    this._log('✅ Sesión ' + (this.isHost ? 'creada' : 'unida') + ': ' + code);
-    this._updateTopBtn(true);
-
-    if (this.isHost && this.selectedProjId) {
-      window._SRV.loadProject(this.selectedProjId).then(data => {
-        if (!data) return;
-        _applyProjectData(data, true);
-        this.socket.emit('project-load', data);
-        this._log('📤 Proyecto enviado a la sala');
+  /* Envía una URL base64 grande en chunks al destinatario */
+  _sendChunked(conn, meta, url) {
+    if (!conn || !conn.open) return;
+    const CS = this._CHUNK_SIZE;
+    const total = Math.ceil(url.length / CS);
+    const txId = Math.random().toString(36).slice(2); // ID único de esta transferencia
+    for (let i = 0; i < total; i++) {
+      const chunk = url.slice(i * CS, (i + 1) * CS);
+      const msg = Object.assign({}, meta, {
+        _type: 'tex-chunk',
+        _txId: txId,
+        _chunkIdx: i,
+        _chunkTotal: total,
+        _chunk: chunk,
       });
+      ((idx) => setTimeout(() => { if (conn.open) try { conn.send(msg); } catch(e) {} }, idx * 30))(i);
     }
-
-    setTimeout(() => {
-      if (!this.socket) return;
-      this.socket.emit('peer-profile', { sessionCode: code, profile: this._getProfile(), name: this.myName });
-    }, 300);
-
-    this._patchCommandHistory();
   },
 
-  _sendProjectToRoom() {
-    if (!this.socket) return;
-    const data = _buildSaveData();
-    data._fromSocketId = this.socket.id;
-    data._sessionCode  = this.sessionCode;
-    this.socket.emit('project-update', data);
+  /* Convierte base64 dataURL a ArrayBuffer */
+  _b64ToBuffer(dataUrl) {
+    const b64 = dataUrl.split(',')[1];
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
   },
 
-  _announceUpdate() {
-    if (!this.connected || !this.socket) return;
-    clearTimeout(this._announceTimer);
-    this._announceTimer = setTimeout(() => {
-      if (!this.connected || !this.socket) return;
-      const d = _buildSaveData();
-      d._fromSocketId = this.socket.id;
-      d._sessionCode  = this.sessionCode;
-      d._isDragUpdate = false;
-      this.socket.emit('project-update', d);
-    }, 120);
+  /* Convierte ArrayBuffer a base64 dataURL, detectando el mime del header */
+  _bufferToB64(buf, mime) {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return 'data:' + (mime || 'image/png') + ';base64,' + btoa(bin);
   },
 
-  _patchCommandHistory() {
-    if (this._cmdPatchDone) return;
-    this._cmdPatchDone = true;
-    const orig = window.CommandHistory;
-    if (!orig) return;
-    const _origPush = orig.push.bind(orig);
-    orig.push = (cmd) => {
-      _origPush(cmd);
-      if (!this._broadcasting) this._announceUpdate();
+  /* Detecta el mime type de un dataUrl */
+  _mimeOf(dataUrl) {
+    const m = dataUrl && dataUrl.match(/^data:([^;]+);/);
+    return m ? m[1] : 'image/png';
+  },
+
+  /* Envía una textura como ArrayBuffer chunkeado — igual que FileDrop */
+  _sendTexture(conn, meta, dataUrl) {
+    if (!conn || !conn.open || !dataUrl) return;
+    // Protocolo string-based (tex-chunk) — compatible con serialization:json de PeerJS
+    // Evita problemas con ArrayBuffers en DataChannel mixto JSON+binario
+    const CS   = 12000;
+    const txId = Math.random().toString(36).slice(2);
+    const total = Math.ceil(dataUrl.length / CS);
+    for (let i = 0; i < total; i++) {
+      const chunk = dataUrl.slice(i * CS, (i + 1) * CS);
+      const msg = Object.assign({}, meta, {
+        _type: 'tex-chunk', _txId: txId,
+        _chunkIdx: i, _chunkTotal: total, _chunk: chunk,
+      });
+      ((idx, m) => setTimeout(() => {
+        if (conn.open) try { conn.send(m); } catch(e) {}
+      }, idx * 25))(i, msg);
+    }
+  },
+
+  /* Envía todas las texturas/frames al guest conectado */
+  _sendTexturesTo(conn) {
+    if (!conn || !conn.open) return;
+    let count = 0;
+    let baseDelay = 0;
+    const PER_TEX = 30; // ms entre el inicio de cada textura
+
+    const scheduleTexture = (meta, url) => {
+      if (!url || url.length < 300) return;
+      ((d, m, u) => setTimeout(() => { if (conn.open) this._sendTexture(conn, m, u); }, d))(baseDelay, meta, url);
+      baseDelay += PER_TEX;
+      count++;
     };
-    ['keyup','mouseup','pointerup'].forEach(ev => {
-      document.addEventListener(ev, () => {
-        if (this.connected && !this._broadcasting) this._announceUpdate();
+
+    // 1) Assets con URL
+    (typeof ASSETS !== 'undefined' ? ASSETS : []).forEach(a => {
+      scheduleTexture({ assetId: a.id }, a.url);
+    });
+
+    // 2) Texturas de objetos (imgUrl / spriteSheet.url)
+    (STATE.objects || []).forEach(o => {
+      let url = o.imgUrl || (o.spriteSheet && o.spriteSheet.url);
+      if (!url && o.assetId) {
+        const a = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === o.assetId);
+        if (a && a.url) url = a.url;
+      }
+      scheduleTexture({ objId: o.id, isSprite: !!(o.spriteSheet && o.spriteSheet.url) }, url);
+
+      // 3) Frames de animaciones y gifUrl
+      (o.animations || []).forEach((anim, animIdx) => {
+        if (anim.gifUrl && anim.gifUrl.length >= 300) {
+          scheduleTexture({ objId: o.id, animIdx, isGif: true }, anim.gifUrl);
+        }
+        (anim.frames || []).forEach((frameUrl, frameIdx) => {
+          scheduleTexture({ objId: o.id, animIdx, frameIdx }, frameUrl);
+        });
       });
+    });
+
+    if (count > 0) this._log('📦 Enviando ' + count + ' texturas al guest…');
+  },
+
+  /* Alias para compatibilidad con llamadas existentes */
+  _announceUpdate() {
+    this.scheduleUpdate();
+    // Si soy host, reenviar texturas a todos los guests
+    if (this.isHost) {
+      setTimeout(() => {
+        Object.values(this._conns).forEach(conn => {
+          if (conn.open) this._sendTexturesTo(conn);
+        });
+      }, 200);
+    }
+  },
+
+  _sendCanvasUpdate() {
+    if (!this.connected || this._broadcasting) return;
+    try {
+      const payload = _buildSaveData();
+      const msg = { _type: 'canvas-update', fromId: this.myPeerId, payload };
+      if (this.isHost) {
+        this._broadcastAll(msg);
+      } else if (this._hostConn && this._hostConn.open) {
+        this._hostConn.send(msg);
+      }
+    } catch(e) { /* silencioso */ }
+  },
+
+  scheduleUpdate() {
+    if (!this.connected || this._broadcasting) return;
+    clearTimeout(this._syncTimer);
+    this._syncTimer = setTimeout(() => this._sendCanvasUpdate(), 150);
+  },
+
+  /* ════════════ DETECCIÓN DE CAMBIOS ════════════ */
+  _patchSync() {
+    if (this._syncPatched) return;
+    this._syncPatched = true;
+
+    // 1) MutationObserver sobre el world-canvas — detecta CUALQUIER cambio visual
+    const wc = document.getElementById('world-canvas');
+    if (wc) {
+      this._mutObs = new MutationObserver(() => {
+        if (!this._broadcasting) this.scheduleUpdate();
+      });
+      this._mutObs.observe(wc, {
+        childList: true, subtree: true,
+        attributes: true, attributeFilter: ['style', 'class', 'data-x', 'data-y', 'data-w', 'data-h'],
+        characterData: true
+      });
+    }
+
+    // 2) mouseup / pointerup sobre el documento — cierra arrastres, redimensiones
+    ['mouseup', 'pointerup'].forEach(ev => {
+      document.addEventListener(ev, () => {
+        if (this.connected && !this._broadcasting) this.scheduleUpdate();
+      }, true);
+    });
+
+    // 3) Patch CommandHistory.push — comandos del editor (undo/redo/add/delete)
+    if (window.CommandHistory && !window.CommandHistory._cdPatched) {
+      const orig = window.CommandHistory.push.bind(window.CommandHistory);
+      window.CommandHistory.push = (cmd) => {
+        orig(cmd);
+        if (this.connected && !this._broadcasting) this.scheduleUpdate();
+      };
+      window.CommandHistory._cdPatched = true;
+    }
+
+    // 4) Patch addObject / removeObj globales
+    if (typeof addObject !== 'undefined' && !addObject._cdPatched) {
+      const origAdd = addObject;
+      window.addObject = function(obj) {
+        origAdd(obj);
+        if (CD.connected && !CD._broadcasting) CD.scheduleUpdate();
+      };
+      window.addObject._cdPatched = true;
+    }
+    if (typeof removeObj !== 'undefined' && !removeObj._cdPatched) {
+      const origRem = removeObj;
+      window.removeObj = function(id) {
+        origRem(id);
+        if (CD.connected && !CD._broadcasting) CD.scheduleUpdate();
+      };
+      window.removeObj._cdPatched = true;
+    }
+
+    // 5) Cualquier input/change en los paneles de propiedades
+    document.addEventListener('input',  (e) => {
+      if (!this.connected || this._broadcasting) return;
+      if (e.target.closest && (e.target.closest('#panel-right') || e.target.closest('#panel-left'))) {
+        this.scheduleUpdate();
+      }
+    }, true);
+    document.addEventListener('change', (e) => {
+      if (!this.connected || this._broadcasting) return;
+      if (e.target.closest && (e.target.closest('#panel-right') || e.target.closest('#panel-left'))) {
+        this.scheduleUpdate();
+      }
+    }, true);
+
+    this._log('🔗 Sync bidireccional activado');
+  },
+
+  /* ════════════ BROADCAST HELPERS ════════════ */
+  _broadcastAll(data) {
+    Object.values(this._conns).forEach(conn => {
+      if (conn.open) { try { conn.send(data); } catch(e) {} }
+    });
+  },
+  _broadcastExcept(excludeId, data) {
+    Object.entries(this._conns).forEach(([id, conn]) => {
+      if (id !== excludeId && conn.open) { try { conn.send(data); } catch(e) {} }
     });
   },
 
+  /* ════════════ DESCONECTAR ════════════ */
   disconnect() {
-    if (this.socket) { this.socket.disconnect(); this.socket = null; }
+    if (this._mutObs) { this._mutObs.disconnect(); this._mutObs = null; }
+    if (this.peer)    { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
     this._onDisconnect();
     this.close();
   },
@@ -21881,9 +22414,11 @@ const CD = {
   _onDisconnect() {
     this.connected   = false;
     this.isHost      = false;
-    this.sessionCode = null;
+    this.myPeerId    = null;
+    this._conns      = {};
+    this._hostConn   = null;
     this._peers      = {};
-    this._cmdPatchDone = false;
+    this._syncPatched = false;
     this._clearCursors();
     this._updateTopBtn(false);
     document.getElementById('cd-pane-setup').style.display     = 'block';
@@ -21892,60 +22427,60 @@ const CD = {
     toast('👥 Co-Director desconectado');
   },
 
-  /* ── cursores ── */
-  _updateCursor(id, name, x, y) {
-    if (id === this.socket?.id) return;
-    if (!this._cursors[id]) {
+  /* ════════════ CURSORES ════════════ */
+  _updateCursor(fromId, name, x, y) {
+    if (fromId === this.myPeerId) return;
+    if (!this._cursors[fromId]) {
       const el = document.createElement('div');
       el.className = 'cd-remote-cursor';
-      el.innerHTML = '<div class="cd-cursor-dot"></div><div class="cd-cursor-label">' + name + '</div>';
+      el.innerHTML = '<div class="cd-cursor-dot"></div><div class="cd-cursor-label">' + (name||'?') + '</div>';
       document.body.appendChild(el);
-      this._cursors[id] = el;
+      this._cursors[fromId] = el;
     }
-    this._cursors[id].style.left = x + 'px';
-    this._cursors[id].style.top  = y + 'px';
+    this._cursors[fromId].style.left = x + 'px';
+    this._cursors[fromId].style.top  = y + 'px';
   },
   _clearCursors() { Object.values(this._cursors).forEach(el => el.remove()); this._cursors = {}; },
 
-  /* ── peers ── */
-  _mergePeers(peers) {
-    peers.forEach(p => {
-      if (!this._peers[p.id]) this._peers[p.id] = {};
-      if (p.profile) { this._peers[p.id].profile = p.profile; if (p.profile.name) this._peers[p.id].name = p.profile.name; }
-      if (p.name) this._peers[p.id].name = this._peers[p.id].name || p.name;
-      if (p.role) this._peers[p.id].role = p.role;
-    });
+  /* ════════════ PEERS LIST ════════════ */
+  _peersList() {
+    return Object.entries(this._peers).map(([id, p]) => ({ id, ...p }));
   },
-  _refreshCards() {
-    const grid = document.getElementById('cd-directors-grid');
-    if (!grid || !this.socket) return;
-    const peers = Object.entries(this._peers).map(([id, p]) => ({
-      id, name: id === this.socket.id ? (this._getProfile().name || this.myName) : p.name,
-      role: p.role, profile: id === this.socket.id ? this._getProfile() : p.profile,
-    }));
-    if (peers.length) this._renderDirectors(peers);
+
+  /* ════════════ UI ════════════ */
+  _showConnected(isHost) {
+    document.getElementById('cd-pane-setup').style.display     = 'none';
+    document.getElementById('cd-pane-connected').style.display = 'flex';
+    document.getElementById('cd-pane-connected').style.flexDirection = 'column';
+    document.getElementById('cd-code-display').style.display   = isHost ? 'block' : 'none';
+    if (isHost) document.getElementById('cd-code-val').textContent = this.myPeerId;
   },
-  _renderDirectors(peers) {
+
+  copyCode() {
+    navigator.clipboard.writeText(this.myPeerId || '').catch(() => {});
+    toast('📋 Código copiado');
+  },
+
+  _renderDirectors() {
     const grid = document.getElementById('cd-directors-grid');
     if (!grid) return;
-    const myId = this.socket?.id;
+    const peers = this._peersList();
+    if (!peers.length) { grid.innerHTML = ''; return; }
     grid.innerHTML = peers.map(p => {
-      const isMe    = p.id === myId;
-      const cached  = this._peers[p.id] || {};
-      const prof    = isMe ? this._getProfile() : (cached.profile || p.profile || {});
-      const name    = isMe ? (prof.name || this.myName) : (prof.name || cached.name || p.name || 'Director');
-      const emoji   = prof.avatarEmoji || '🎮';
-      const role    = p.role || (isMe ? (this.isHost ? 'Host' : 'Co-Director') : 'Co-Director');
-      return '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(139,92,246,.2);border-radius:10px;min-width:80px;">' +
-        '<div style="font-size:28px;">' + emoji + '</div>' +
-        '<div style="font-size:11px;font-weight:700;color:#e9d5ff;text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</div>' +
-        '<div style="font-size:9.5px;color:' + (role==='Host'?'#c084fc':'#4ade80') + ';font-weight:600;letter-spacing:.5px;">' + role + '</div>' +
-        (isMe ? '<div style="font-size:8px;color:rgba(255,255,255,.3);">vos</div>' : '') +
-        '</div>';
+      const isMe  = p.id === this.myPeerId;
+      const prof  = isMe ? this._getProfile() : (p.profile || {});
+      const name  = prof.name || p.name || 'Director';
+      const emoji = prof.avatarEmoji || '🎮';
+      const role  = p.role || (isMe ? (this.isHost ? 'Host' : 'Co-Director') : 'Co-Director');
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(139,92,246,.2);border-radius:10px;min-width:80px;">
+        <div style="font-size:28px;">${emoji}</div>
+        <div style="font-size:11px;font-weight:700;color:#e9d5ff;text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</div>
+        <div style="font-size:9.5px;color:${role==='Host'?'#c084fc':'#4ade80'};font-weight:600;letter-spacing:.5px;">${role}</div>
+        ${isMe?'<div style="font-size:8px;color:rgba(255,255,255,.3);">vos</div>':''}
+      </div>`;
     }).join('');
   },
 
-  /* ── perfil ── */
   _getProfile() {
     try {
       const dp = (typeof _dpProfile !== 'undefined') ? _dpProfile : {};
@@ -21956,21 +22491,20 @@ const CD = {
         pso = list[idx] || {};
       } catch(e) {}
       const m = Object.assign({}, pso, dp);
-      return { name: m.name || this.myName || 'Director', title: m.title || '', avatarType: m.avatarType || 'emoji', avatarEmoji: m.avatarEmoji || '🎮', avatarId: m.avatarId || null, photoDataUrl: m.photoDataUrl || null, cardTheme: m.cardTheme || 1 };
-    } catch(e) { return { name: this.myName || 'Director', avatarType: 'emoji', avatarEmoji: '🎮', cardTheme: 1 }; }
+      return { name: m.name || this.myName || 'Director', title: m.title||'', avatarType: m.avatarType||'emoji', avatarEmoji: m.avatarEmoji||'🎮', avatarId: m.avatarId||null, photoDataUrl: m.photoDataUrl||null, cardTheme: m.cardTheme||1 };
+    } catch(e) { return { name: this.myName||'Director', avatarType:'emoji', avatarEmoji:'🎮', cardTheme:1 }; }
   },
 
-  /* ── helpers UI ── */
   _setStatus(type, msg) {
     const dot  = document.getElementById('cd-status-dot');
     const text = document.getElementById('cd-status-text');
-    if (dot)  dot.className  = 'cd-status-dot' + (type ? ' ' + type : '');
+    if (dot)  dot.className   = 'cd-status-dot' + (type ? ' '+type : '');
     if (text) text.textContent = msg;
   },
   _setStatus2(type, msg) {
     const dot  = document.getElementById('cd-status-dot2');
     const text = document.getElementById('cd-status-text2');
-    if (dot)  dot.className  = 'cd-status-dot' + (type ? ' ' + type : '');
+    if (dot)  dot.className   = 'cd-status-dot' + (type ? ' '+type : '');
     if (text) text.textContent = msg;
   },
   _log(msg) {
@@ -21987,27 +22521,25 @@ const CD = {
     const p = btn.querySelector('.cd-pulse');
     if (p) p.style.background = live ? '#4ade80' : '#a855f7';
   },
-  copyCode() {
-    navigator.clipboard.writeText(this.sessionCode || '').catch(() => {});
-    toast('📋 Código copiado: ' + this.sessionCode);
-  },
-  _genCode() {
-    const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    return Array.from({length:6}, () => c[Math.floor(Math.random()*c.length)]).join('');
-  },
 };
 
-/* cursor sync */
+/* ── Cursor sync en tiempo real ── */
+let _cdCursorThrottle = 0;
 document.addEventListener('mousemove', e => {
-  if (!CD.connected || !CD.socket) return;
-  CD.socket.emit('cursor-move', { name: CD.myName, x: e.clientX, y: e.clientY });
+  if (!CD.connected || !CD.myPeerId) return;
+  const now = Date.now();
+  if (now - _cdCursorThrottle < 50) return; // máx 20fps para cursores
+  _cdCursorThrottle = now;
+  const msg = { _type: 'cursor-move', fromId: CD.myPeerId, name: CD.myName, x: e.clientX, y: e.clientY };
+  if (CD.isHost) {
+    CD._broadcastAll(msg);
+  } else if (CD._hostConn && CD._hostConn.open) {
+    try { CD._hostConn.send(msg); } catch(e) {}
+  }
 });
 
-/* cd_load */
-if (typeof loadFromKey !== 'undefined') loadFromKey.__cd_load = _applyProjectData;
-
 document.addEventListener('DOMContentLoaded', () => {
-  addLog('info', '🎬 Co-Director listo · Clic en "Co-Director" para colaborar.');
+  if (typeof addLog === 'function') addLog('info', '🎬 Co-Director listo (PeerJS P2P) · Clic en "Co-Director" para colaborar.');
 });
 </script>
 
