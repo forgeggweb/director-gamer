@@ -22136,8 +22136,42 @@ case 'firebase-updated': {
   _initPeer(cb) {
     if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
 
+    // Detectar si estamos en HTTPS (Render, GitHub Pages, etc.)
+    const isSecure = location.protocol === 'https:';
+
+    // Servidores STUN/TURN públicos — necesarios para NAT traversal fuera de localhost
+    const iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      // TURN público de Open Relay (metered.ca) — fallback cuando STUN no alcanza
+      {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+          'turn:openrelay.metered.ca:443?transport=tcp',
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
+    ];
+
+    const peerConfig = {
+      debug: 0,
+      config: { iceServers, iceTransportPolicy: 'all' },
+    };
+
+    // En HTTPS forzar conexión segura al servidor de señalización PeerJS
+    if (isSecure) {
+      peerConfig.secure = true;
+      peerConfig.host   = '0.peerjs.com';
+      peerConfig.port   = 443;
+      peerConfig.path   = '/';
+    }
+
     try {
-      this.peer = new Peer({ debug: 0 });
+      this.peer = new Peer(peerConfig);
     } catch(e) {
       this._setStatus('red', 'Error PeerJS: ' + e.message);
       return;
@@ -22145,14 +22179,22 @@ case 'firebase-updated': {
 
     this.peer.on('open', id => {
       this.myPeerId = id;
-      this._log('📡 PeerJS listo · ID: ' + id);
+      this._log('📡 PeerJS listo · ID: ' + id + (isSecure ? ' (HTTPS)' : ' (local)'));
       cb();
     });
 
     this.peer.on('error', e => {
       const msg = e.type || e.message || String(e);
       this._setStatus('red', 'PeerJS: ' + msg);
-      this._log('❌ PeerJS: ' + msg);
+      if (msg === 'network' || msg === 'disconnected') {
+        this._log('❌ Sin conexión al servidor de señalización. Verificá tu red.');
+      } else if (msg === 'peer-unavailable') {
+        this._log('❌ Host no encontrado — ¿código correcto?');
+      } else if (msg === 'webrtc') {
+        this._log('❌ Error WebRTC — puede ser bloqueo de firewall o falta de TURN.');
+      } else {
+        this._log('❌ PeerJS: ' + msg);
+      }
     });
 
     this.peer.on('disconnected', () => {
