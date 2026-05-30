@@ -21311,385 +21311,99 @@ function _applyProfileNamespace(uid) {
      Diseño nuevo · Host elige el proyecto
 ═══════════════════════════════════════════════════════ -->
 
-<!-- Socket.io: carga desde el servidor (Render), con fallback a CDN -->
-<script>
-(function() {
-  if (typeof io !== 'undefined') return; // ya cargado
-
-  function tryLoad(srcs, idx) {
-    if (idx >= srcs.length) {
-      console.warn('[Co-Director] socket.io no disponible. Verificá que el servidor esté corriendo.');
-      return;
-    }
-    var s = document.createElement('script');
-    s.src = srcs[idx];
-    s.onload = function() {
-      if (typeof io !== 'undefined') {
-        console.log('[Co-Director] socket.io cargado desde:', srcs[idx]);
-      } else {
-        tryLoad(srcs, idx + 1);
-      }
-    };
-    s.onerror = function() { tryLoad(srcs, idx + 1); };
-    document.head.appendChild(s);
-  }
-
-  tryLoad([
-    '/socket.io/socket.io.js',                        // servidor propio (Render/local)
-    'https://cdn.socket.io/4.7.5/socket.io.min.js'   // CDN fallback
-  ], 0);
-})();
-</script>
+<!-- socket.io desde CDN -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <style>
-/* ── Botón topbar ── */
 .cd-topbar-btn {
-  display: flex; align-items: center; gap: 7px;
-  padding: 5px 14px;
-  background: linear-gradient(135deg, rgba(139,92,246,.18), rgba(59,130,246,.12));
-  border: 1px solid rgba(139,92,246,.4);
-  border-radius: 20px;
-  color: #c084fc;
-  font-family: 'Google Sans', sans-serif;
-  font-size: 12.5px; font-weight: 600;
-  cursor: pointer;
-  transition: all .2s;
-  position: relative;
+  display:flex;align-items:center;gap:7px;padding:5px 14px;
+  background:linear-gradient(135deg,rgba(139,92,246,.18),rgba(59,130,246,.12));
+  border:1px solid rgba(139,92,246,.4);border-radius:20px;color:#c084fc;
+  font-family:'Google Sans',sans-serif;font-size:12.5px;font-weight:600;
+  cursor:pointer;transition:all .2s;position:relative;
 }
-.cd-topbar-btn:hover {
-  background: linear-gradient(135deg, rgba(139,92,246,.32), rgba(59,130,246,.22));
-  border-color: #a855f7;
-  color: #e9d5ff;
-  box-shadow: 0 0 16px rgba(168,85,247,.25);
-}
-.cd-topbar-btn.live {
-  background: linear-gradient(135deg, rgba(52,168,83,.18), rgba(16,185,129,.12));
-  border-color: rgba(52,168,83,.5);
-  color: #4ade80;
-}
-.cd-topbar-btn.live:hover { box-shadow: 0 0 16px rgba(52,168,83,.3); }
-.cd-pulse {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: #a855f7;
-  animation: cd-blink 2s ease-in-out infinite;
-}
-.cd-topbar-btn.live .cd-pulse { background: #4ade80; }
-@keyframes cd-blink {
-  0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(168,85,247,.5); }
-  50%      { opacity:.5; box-shadow: 0 0 0 4px rgba(168,85,247,0); }
-}
+.cd-topbar-btn:hover{background:linear-gradient(135deg,rgba(139,92,246,.32),rgba(59,130,246,.22));border-color:#a855f7;color:#e9d5ff;box-shadow:0 0 16px rgba(168,85,247,.25);}
+.cd-topbar-btn.live{background:linear-gradient(135deg,rgba(52,168,83,.18),rgba(16,185,129,.12));border-color:rgba(52,168,83,.5);color:#4ade80;}
+.cd-pulse{width:7px;height:7px;border-radius:50%;background:#a855f7;animation:cd-blink 2s ease-in-out infinite;}
+.cd-topbar-btn.live .cd-pulse{background:#4ade80;}
+@keyframes cd-blink{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(168,85,247,.5);}50%{opacity:.5;box-shadow:0 0 0 4px rgba(168,85,247,0);}}
 
-/* ── Overlay backdrop ── */
-#cd-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,.7);
-  backdrop-filter: blur(8px);
-  z-index: 9500;
-  display: flex; align-items: center; justify-content: center;
-  opacity: 0; pointer-events: none;
-  transition: opacity .25s;
-}
-#cd-overlay.open { opacity:1; pointer-events: all; }
+#cd-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);z-index:9500;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s;}
+#cd-overlay.open{opacity:1;pointer-events:all;}
 
-/* ── Shell principal ── */
-.cd-shell {
-  width: 500px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 48px);
-  background: linear-gradient(160deg, #1a1825 0%, #211e2e 60%, #1c1928 100%);
-  border: 1px solid rgba(139,92,246,.3);
-  border-radius: 20px;
-  box-shadow: 0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(139,92,246,.1), inset 0 1px 0 rgba(255,255,255,.06);
-  overflow: hidden;
-  display: flex; flex-direction: column;
-  animation: cd-pop .28s cubic-bezier(.34,1.56,.64,1);
-}
-@keyframes cd-pop {
-  from { transform: scale(.88) translateY(20px); opacity:0; }
-  to   { transform: scale(1) translateY(0); opacity:1; }
-}
+.cd-shell{width:500px;max-width:calc(100vw - 32px);max-height:calc(100vh - 48px);background:linear-gradient(160deg,#1a1825 0%,#211e2e 60%,#1c1928 100%);border:1px solid rgba(139,92,246,.3);border-radius:20px;box-shadow:0 32px 80px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.06);overflow:hidden;display:flex;flex-direction:column;animation:cd-pop .28s cubic-bezier(.34,1.56,.64,1);}
+@keyframes cd-pop{from{transform:scale(.88) translateY(20px);opacity:0;}to{transform:scale(1) translateY(0);opacity:1;}}
 
-/* ── Header ── */
-.cd-header {
-  padding: 22px 24px 18px;
-  background: linear-gradient(90deg, rgba(139,92,246,.12), rgba(59,130,246,.06));
-  border-bottom: 1px solid rgba(139,92,246,.15);
-  display: flex; align-items: center; gap: 12px;
-}
-.cd-header-glow {
-  width: 40px; height: 40px; border-radius: 12px;
-  background: linear-gradient(135deg, #7c3aed, #3b82f6);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px;
-  box-shadow: 0 4px 16px rgba(124,58,237,.4);
-  flex-shrink: 0;
-}
-.cd-header-text h2 {
-  font-family: 'Google Sans Display', sans-serif;
-  font-size: 17px; font-weight: 700; color: #e9d5ff;
-  margin-bottom: 2px;
-}
-.cd-header-text p { font-size: 11.5px; color: rgba(196,180,214,.6); }
-.cd-header-close {
-  margin-left: auto;
-  width: 30px; height: 30px; border-radius: 50%;
-  background: rgba(255,255,255,.06); border: none;
-  color: rgba(196,180,214,.6); font-size: 16px;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: all .15s; flex-shrink: 0;
-}
-.cd-header-close:hover { background: rgba(255,255,255,.12); color: #e9d5ff; }
+.cd-header{padding:22px 24px 18px;background:linear-gradient(90deg,rgba(139,92,246,.12),rgba(59,130,246,.06));border-bottom:1px solid rgba(139,92,246,.15);display:flex;align-items:center;gap:12px;}
+.cd-header-glow{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 4px 16px rgba(124,58,237,.4);flex-shrink:0;}
+.cd-header-text h2{font-family:'Google Sans Display',sans-serif;font-size:17px;font-weight:700;color:#e9d5ff;margin-bottom:2px;}
+.cd-header-text p{font-size:11.5px;color:rgba(196,180,214,.6);}
+.cd-header-close{margin-left:auto;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.06);border:none;color:rgba(196,180,214,.6);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;}
+.cd-header-close:hover{background:rgba(255,255,255,.12);color:#e9d5ff;}
 
-/* ── Body ── */
-.cd-body { padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+.cd-body{padding:20px 24px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;}
+.cd-mode-row{display:flex;gap:12px;}
+.cd-mode-card{flex:1;padding:16px 12px;border-radius:14px;background:rgba(255,255,255,.04);border:1.5px solid rgba(139,92,246,.2);cursor:pointer;text-align:center;transition:all .2s;}
+.cd-mode-card:hover{border-color:#a855f7;background:rgba(139,92,246,.1);}
+.cd-mode-card.active{border-color:#a855f7;background:linear-gradient(135deg,rgba(139,92,246,.18),rgba(59,130,246,.1));box-shadow:0 0 0 1px rgba(139,92,246,.3);}
+.cd-mode-icon{font-size:26px;margin-bottom:6px;}
+.cd-mode-title{font-size:13px;font-weight:700;color:#e9d5ff;margin-bottom:3px;}
+.cd-mode-desc{font-size:10.5px;color:rgba(196,180,214,.55);line-height:1.4;}
 
-/* ── Modo cards ── */
-.cd-mode-row { display: flex; gap: 12px; }
-.cd-mode-card {
-  flex: 1; padding: 18px 14px; border-radius: 14px;
-  background: rgba(255,255,255,.04);
-  border: 1.5px solid rgba(139,92,246,.2);
-  cursor: pointer; text-align: center;
-  transition: all .22s cubic-bezier(.34,1.56,.64,1);
-}
-.cd-mode-card:hover {
-  border-color: #a855f7;
-  background: rgba(139,92,246,.1);
-  transform: translateY(-3px);
-  box-shadow: 0 8px 24px rgba(0,0,0,.4);
-}
-.cd-mode-card.active {
-  border-color: #a855f7;
-  background: linear-gradient(135deg, rgba(139,92,246,.18), rgba(59,130,246,.1));
-  box-shadow: 0 0 0 1px rgba(139,92,246,.3), 0 8px 24px rgba(0,0,0,.3);
-}
-.cd-mode-icon { font-size: 28px; margin-bottom: 8px; }
-.cd-mode-title { font-size: 13px; font-weight: 700; color: #e9d5ff; margin-bottom: 4px; }
-.cd-mode-desc  { font-size: 10.5px; color: rgba(196,180,214,.55); line-height: 1.5; }
+.cd-field{display:flex;flex-direction:column;gap:5px;}
+.cd-label{font-size:10.5px;font-weight:600;color:rgba(196,180,214,.7);letter-spacing:.5px;text-transform:uppercase;}
+.cd-input{background:rgba(255,255,255,.06);border:1px solid rgba(139,92,246,.25);border-radius:10px;color:#e9d5ff;font-size:13px;padding:9px 13px;outline:none;font-family:'Roboto Mono',monospace;transition:border-color .15s;width:100%;}
+.cd-input:focus{border-color:#a855f7;box-shadow:0 0 0 3px rgba(168,85,247,.15);}
+.cd-hint{font-size:10px;color:rgba(196,180,214,.4);margin-top:3px;}
 
-/* ── Campos ── */
-.cd-field { display: flex; flex-direction: column; gap: 6px; }
-.cd-label { font-size: 11px; font-weight: 600; color: rgba(196,180,214,.7); letter-spacing: .5px; text-transform: uppercase; }
-.cd-input {
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(139,92,246,.25);
-  border-radius: 10px; color: #e9d5ff;
-  font-size: 13.5px; padding: 10px 14px;
-  outline: none; font-family: 'Roboto Mono', monospace;
-  transition: border-color .15s;
-  width: 100%;
-}
-.cd-input:focus { border-color: #a855f7; box-shadow: 0 0 0 3px rgba(168,85,247,.15); }
+.cd-proj-list{display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto;}
+.cd-proj-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(139,92,246,.12);cursor:pointer;transition:all .15s;}
+.cd-proj-item:hover{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.3);}
+.cd-proj-item.selected{background:rgba(139,92,246,.15);border-color:#a855f7;}
+.cd-proj-icon{font-size:16px;flex-shrink:0;}
+.cd-proj-info{flex:1;min-width:0;}
+.cd-proj-name{font-size:12px;font-weight:600;color:#e9d5ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cd-proj-date{font-size:10px;color:rgba(196,180,214,.45);}
+.cd-proj-check{color:#4ade80;font-weight:700;font-size:14px;}
 
-/* ── Código de sesión ── */
-.cd-code-box {
-  background: rgba(0,0,0,.3);
-  border: 1.5px solid rgba(139,92,246,.35);
-  border-radius: 14px; padding: 16px 20px;
-  display: flex; align-items: center; gap: 14px;
-}
-.cd-code-val {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 26px; font-weight: 700;
-  color: #c084fc; letter-spacing: 6px; flex: 1;
-}
-.cd-copy-btn {
-  background: rgba(139,92,246,.2);
-  border: 1px solid rgba(139,92,246,.4);
-  border-radius: 8px; color: #c084fc;
-  font-size: 11px; font-weight: 600;
-  padding: 6px 12px; cursor: pointer;
-  font-family: 'Google Sans', sans-serif;
-  transition: all .15s; white-space: nowrap;
-}
-.cd-copy-btn:hover { background: rgba(139,92,246,.35); }
+.cd-status{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.2);border-radius:8px;font-size:11.5px;color:rgba(196,180,214,.7);}
+.cd-status-dot{width:8px;height:8px;border-radius:50%;background:rgba(196,180,214,.3);flex-shrink:0;}
+.cd-status-dot.green{background:#4ade80;box-shadow:0 0 6px #4ade80;}
+.cd-status-dot.yellow{background:#fbbc04;box-shadow:0 0 6px #fbbc04;}
+.cd-status-dot.red{background:#ea4335;box-shadow:0 0 6px #ea4335;}
 
-/* ── Status bar ── */
-.cd-status {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; border-radius: 10px;
-  background: rgba(255,255,255,.04);
-  border: 1px solid rgba(255,255,255,.08);
-  font-size: 12px; color: rgba(196,180,214,.7);
-}
-.cd-status-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: rgba(196,180,214,.3); flex-shrink: 0;
-}
-.cd-status-dot.green  { background: #4ade80; box-shadow: 0 0 8px #4ade80; animation: cd-blink 2s infinite; }
-.cd-status-dot.yellow { background: #facc15; box-shadow: 0 0 8px #facc15; animation: cd-blink 1s infinite; }
-.cd-status-dot.red    { background: #f87171; }
+.cd-code-box{background:rgba(0,0,0,.3);border:1.5px solid rgba(139,92,246,.35);border-radius:14px;padding:14px 18px;display:flex;align-items:center;gap:12px;}
+.cd-code-val{font-family:'Roboto Mono',monospace;font-size:24px;font-weight:700;color:#c084fc;letter-spacing:6px;flex:1;}
+.cd-copy-btn{background:rgba(139,92,246,.2);border:1px solid rgba(139,92,246,.4);border-radius:8px;color:#c084fc;font-size:11px;font-weight:600;padding:6px 12px;cursor:pointer;white-space:nowrap;transition:all .15s;}
+.cd-copy-btn:hover{background:rgba(139,92,246,.35);}
 
-/* ── Cards de directores ── */
-.cd-directors-grid {
-  display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
-  padding: 4px 0;
-}
-.cd-dir-card {
-  width: 120px;
-  background: linear-gradient(145deg, #1a1825, #2a2440, #1e1c2e);
-  border: 1px solid rgba(102,157,246,.2);
-  border-radius: 16px;
-  padding: 16px 10px 14px;
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  position: relative; overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0,0,0,.5);
-  transition: transform .22s cubic-bezier(.34,1.56,.64,1), box-shadow .22s;
-}
-.cd-dir-card:hover {
-  transform: translateY(-5px) scale(1.03);
-  box-shadow: 0 16px 40px rgba(0,0,0,.6), 0 0 0 1px rgba(168,85,247,.3);
-}
-.cd-dir-card::before {
-  content:''; position:absolute; inset:0;
-  background: linear-gradient(125deg, transparent 30%, rgba(102,157,246,.06) 45%, rgba(168,85,247,.08) 55%, transparent 70%);
-  border-radius:16px; pointer-events:none; opacity:0; transition:opacity .3s;
-}
-.cd-dir-card:hover::before { opacity:1; }
-.cd-dir-card::after {
-  content:''; position:absolute; inset:0;
-  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.05) 2px, rgba(0,0,0,.05) 4px);
-  border-radius:16px; pointer-events:none;
-}
-.cdc-ring {
-  width: 62px; height: 62px; border-radius: 50%; padding: 2.5px;
-  background: conic-gradient(#7c3aed, #3b82f6, #10b981, #facc15, #7c3aed);
-  position: relative; z-index:1; flex-shrink:0;
-  animation: cd-spin 8s linear infinite;
-}
-@keyframes cd-spin { to { transform: rotate(360deg); } }
-.cdc-inner {
-  width:100%; height:100%; border-radius:50%;
-  background: #1a1825;
-  display:flex; align-items:center; justify-content:center;
-  font-size: 28px; border: 2px solid #1a1825;
-}
-.cdc-name {
-  font-family: 'Google Sans Display', sans-serif;
-  font-size: 11px; font-weight: 700; color: #e9d5ff;
-  text-align: center; position: relative; z-index:1;
-  max-width: 108px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  text-shadow: 0 0 12px rgba(102,157,246,.4);
-}
-.cdc-role {
-  font-size: 7.5px; color: rgba(102,157,246,.75);
-  font-family: 'Roboto Mono', monospace;
-  letter-spacing: .8px; text-transform: uppercase;
-  position:relative; z-index:1;
-}
-.cdc-badge {
-  font-size: 6.5px; font-weight: 700; letter-spacing: .8px;
-  padding: 2px 7px; border-radius: 4px;
-  position: relative; z-index:1;
-}
-.cdc-badge.host  { background: rgba(139,92,246,.2); border:1px solid rgba(139,92,246,.4); color:#c084fc; }
-.cdc-badge.guest { background: rgba(52,168,83,.15); border:1px solid rgba(52,168,83,.35); color:#4ade80; }
-.cdc-you { font-size: 7px; color: rgba(196,180,214,.4); position:relative; z-index:1; }
+.cd-log{height:80px;overflow-y:auto;font-family:'Roboto Mono',monospace;font-size:10px;color:rgba(196,180,214,.5);display:flex;flex-direction:column;gap:2px;}
+.cd-log div{padding:1px 0;border-bottom:1px solid rgba(255,255,255,.03);}
 
-/* ── Log ── */
-.cd-log {
-  background: rgba(0,0,0,.25);
-  border: 1px solid rgba(255,255,255,.07);
-  border-radius: 10px; padding: 10px 12px;
-  max-height: 80px; overflow-y: auto;
-  font-family: 'Roboto Mono', monospace;
-  font-size: 10px; color: rgba(196,180,214,.5);
-  line-height: 1.8;
-}
+.cd-footer{padding:14px 24px;border-top:1px solid rgba(139,92,246,.12);display:flex;gap:10px;justify-content:flex-end;flex-shrink:0;}
+.cd-btn{padding:8px 18px;border-radius:10px;font-family:'Google Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s;}
+.cd-btn.primary{background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;}
+.cd-btn.primary:hover{opacity:.9;}
+.cd-btn.secondary{background:rgba(255,255,255,.07);color:rgba(196,180,214,.8);border:1px solid rgba(255,255,255,.1);}
+.cd-btn.secondary:hover{background:rgba(255,255,255,.12);}
+.cd-btn.danger{background:rgba(234,67,53,.15);color:#ff6b5b;border:1px solid rgba(234,67,53,.3);}
+.cd-btn.danger:hover{background:rgba(234,67,53,.25);}
 
-/* ── Footer ── */
-.cd-footer {
-  padding: 16px 24px;
-  border-top: 1px solid rgba(255,255,255,.07);
-  display: flex; gap: 10px; justify-content: flex-end;
-}
-.cd-btn {
-  padding: 9px 20px; border-radius: 10px;
-  font-family: 'Google Sans', sans-serif;
-  font-size: 13px; font-weight: 600; cursor: pointer;
-  transition: all .15s; border: none;
-}
-.cd-btn.primary {
-  background: linear-gradient(135deg, #7c3aed, #5b21b6);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(124,58,237,.4);
-}
-.cd-btn.primary:hover { background: linear-gradient(135deg, #8b5cf6, #6d28d9); box-shadow: 0 6px 20px rgba(124,58,237,.5); }
-.cd-btn.secondary {
-  background: rgba(255,255,255,.07);
-  color: rgba(196,180,214,.8);
-  border: 1px solid rgba(255,255,255,.1);
-}
-.cd-btn.secondary:hover { background: rgba(255,255,255,.12); color: #e9d5ff; }
-.cd-btn.danger {
-  background: rgba(239,68,68,.12);
-  color: #f87171;
-  border: 1px solid rgba(239,68,68,.25);
-}
-.cd-btn.danger:hover { background: rgba(239,68,68,.22); }
+.cd-remote-cursor{position:fixed;pointer-events:none;z-index:9999;transform:translate(-50%,-50%);}
+.cd-cursor-dot{width:10px;height:10px;border-radius:50%;background:#c084fc;box-shadow:0 0 8px #c084fc;}
+.cd-cursor-label{font-size:10px;color:#e9d5ff;background:rgba(124,58,237,.8);padding:2px 6px;border-radius:4px;white-space:nowrap;margin-top:2px;}
 
-/* ── Cursores remotos ── */
-.cd-remote-cursor {
-  position: fixed; pointer-events: none; z-index: 9000;
-  transition: left .08s, top .08s;
-}
-.cd-cursor-dot {
-  width: 10px; height: 10px; border-radius: 50%;
-  background: #a855f7;
-  box-shadow: 0 0 8px #a855f7;
-}
-.cd-cursor-label {
-  margin-top: 6px; margin-left: 4px;
-  background: rgba(139,92,246,.85);
-  color: #fff; font-size: 10px; font-weight: 600;
-  padding: 2px 7px; border-radius: 6px;
-  font-family: 'Google Sans', sans-serif;
-  white-space: nowrap;
-}
-
-/* ── Proyecto selector (solo host) ── */
-.cd-proj-list {
-  display: flex; flex-direction: column; gap: 8px;
-  max-height: 160px; overflow-y: auto;
-}
-.cd-proj-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; border-radius: 10px;
-  background: rgba(255,255,255,.04);
-  border: 1px solid rgba(255,255,255,.08);
-  cursor: pointer; transition: all .15s;
-}
-.cd-proj-item:hover { background: rgba(139,92,246,.12); border-color: rgba(139,92,246,.3); }
-.cd-proj-item.selected { background: rgba(139,92,246,.18); border-color: #a855f7; }
-.cd-proj-icon { font-size: 18px; flex-shrink:0; }
-.cd-proj-info { flex:1; min-width:0; }
-.cd-proj-name { font-size:12.5px; font-weight:600; color:#e9d5ff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.cd-proj-date { font-size:10px; color:rgba(196,180,214,.45); margin-top:2px; }
-.cd-proj-check { font-size:16px; color:#a855f7; }
+.cd-directors-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;padding:4px 0;}
 </style>
 
-<!-- ── Botón en topbar ── -->
-<script>
-(function injectCDButton() {
-  const topRight = document.querySelector('.topbar-right') || document.querySelector('#topbar > div:last-child');
-  if (!topRight) return;
-  const btn = document.createElement('button');
-  btn.className = 'cd-topbar-btn';
-  btn.id = 'cd-topbar-btn';
-  btn.onclick = () => CD.open();
-  btn.innerHTML = `<span>🎬</span><span>Co-Director</span><span class="cd-pulse" id="cd-pulse"></span>`;
-  topRight.prepend(btn);
-})();
-</script>
-
-<!-- ── Overlay HTML ── -->
+<!-- CO-DIRECTOR OVERLAY -->
 <div id="cd-overlay">
   <div class="cd-shell">
     <div class="cd-header">
       <div class="cd-header-glow">🎬</div>
       <div class="cd-header-text">
         <h2>Co-Director</h2>
-        <p>Colaboración en tiempo real · Socket.io</p>
+        <p>Colaboración en tiempo real &middot; Socket.io</p>
       </div>
       <button class="cd-header-close" onclick="CD.close()">✕</button>
     </div>
@@ -21697,6 +21411,7 @@ function _applyProfileNamespace(uid) {
     <!-- PANE SETUP -->
     <div id="cd-pane-setup">
       <div class="cd-body">
+
         <div class="cd-mode-row">
           <div class="cd-mode-card active" id="cd-card-host" onclick="CD.selectMode('host')">
             <div class="cd-mode-icon">👑</div>
@@ -21712,41 +21427,35 @@ function _applyProfileNamespace(uid) {
 
         <div class="cd-field">
           <div class="cd-label">Tu nombre</div>
-          <input class="cd-input" id="cd-my-name" placeholder="Ej: María, Equipo Rojo…" value="Director">
+          <input class="cd-input" id="cd-my-name" placeholder="Director…">
         </div>
 
         <div class="cd-field">
-          <div class="cd-label" style="display:flex;align-items:center;justify-content:space-between;">
-            <span>URL del servidor <span style="opacity:.5;font-weight:400;">(opcional)</span></span>
-            <span id="cd-srv-test-status" style="font-size:10px;"></span>
-          </div>
-          <input class="cd-input" id="cd-server-url" placeholder="https://tu-app.onrender.com"
-            style="font-size:11px;" oninput="CD._onServerUrlChange(this.value)">
-          <div style="font-size:10px;color:rgba(196,180,214,.45);margin-top:4px;">
-            <strong style="color:rgba(251,188,4,.7);">Requerido</strong> si abrís el HTML como archivo local · Ej: <code style="font-size:9.5px;color:#c084fc;">https://tu-app.onrender.com</code>
-          </div>
+          <div class="cd-label">URL del servidor</div>
+          <input class="cd-input" id="cd-server-url" placeholder="https://tu-app.onrender.com" style="font-size:12px;" oninput="CD._onUrlChange(this.value)">
+          <div class="cd-hint">Tu servidor de Render · Se guarda automáticamente</div>
         </div>
 
-        <!-- Solo host: elegir proyecto -->
         <div id="cd-host-section">
-          <div class="cd-label" style="margin-bottom:8px;">Proyecto a compartir</div>
+          <div class="cd-label" style="margin-bottom:6px;">Proyecto a compartir</div>
           <div class="cd-proj-list" id="cd-proj-list">
-            <div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados</div>
+            <div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">Ingresá la URL del servidor para ver proyectos</div>
           </div>
+          <button onclick="CD._loadProjects()" style="margin-top:6px;background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.25);border-radius:6px;color:#c084fc;font-size:11px;padding:5px 12px;cursor:pointer;width:100%;">↻ Recargar proyectos</button>
         </div>
 
-        <!-- Solo guest: ingresar código -->
         <div id="cd-join-section" style="display:none;">
           <div class="cd-field">
             <div class="cd-label">Código de sesión</div>
-            <input class="cd-input" id="cd-join-code" placeholder="Ej: DRAGON42" maxlength="20" style="text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:18px;">
+            <input class="cd-input" id="cd-join-code" placeholder="XXXXXX" maxlength="10" style="text-transform:uppercase;letter-spacing:4px;text-align:center;font-size:20px;">
           </div>
         </div>
 
         <div class="cd-status">
           <div class="cd-status-dot" id="cd-status-dot"></div>
-          <span id="cd-status-text">Listo para conectar</span>
+          <span id="cd-status-text">Listo</span>
         </div>
+
       </div>
       <div class="cd-footer">
         <button class="cd-btn secondary" onclick="CD.close()">Cancelar</button>
@@ -21757,17 +21466,18 @@ function _applyProfileNamespace(uid) {
     <!-- PANE CONECTADO -->
     <div id="cd-pane-connected" style="display:none;">
       <div class="cd-body">
-        <div>
-          <div class="cd-label" style="margin-bottom:12px;">Directores en sesión</div>
-          <div class="cd-directors-grid" id="cd-directors-grid"></div>
+
+        <div id="cd-code-display" style="display:none;">
+          <div class="cd-label" style="margin-bottom:6px;">Código de sesión — compartilo</div>
+          <div class="cd-code-box">
+            <div class="cd-code-val" id="cd-code-val">——</div>
+            <button class="cd-copy-btn" onclick="CD.copyCode()">📋 Copiar</button>
+          </div>
         </div>
 
-        <div class="cd-code-box" id="cd-code-display" style="display:none;">
-          <div style="flex:1;">
-            <div style="font-size:10px;color:rgba(196,180,214,.5);margin-bottom:4px;font-family:'Roboto Mono';">CÓDIGO DE SESIÓN</div>
-            <div class="cd-code-val" id="cd-code-val">——</div>
-          </div>
-          <button class="cd-copy-btn" onclick="CD.copyCode()">📋 Copiar</button>
+        <div>
+          <div class="cd-label" style="margin-bottom:8px;">Directores en sesión</div>
+          <div class="cd-directors-grid" id="cd-directors-grid"></div>
         </div>
 
         <div class="cd-status">
@@ -21776,9 +21486,10 @@ function _applyProfileNamespace(uid) {
         </div>
 
         <div>
-          <div class="cd-label" style="margin-bottom:6px;">Actividad</div>
+          <div class="cd-label" style="margin-bottom:4px;">Log</div>
           <div class="cd-log" id="cd-log"></div>
         </div>
+
       </div>
       <div class="cd-footer">
         <button class="cd-btn secondary" onclick="CD.close()">Cerrar</button>
@@ -21790,158 +21501,152 @@ function _applyProfileNamespace(uid) {
 </div>
 
 <script>
-/* ═══════════════════════════════════════════════════════════
-   _SRV — Capa de servidor (Socket.io)
-   Expone: saveProject, loadProject, listProjects, clearProjects
-   Todo via el socket del Co-Director (mismo servidor)
-═══════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════
+   _SRV  —  capa servidor via socket
+══════════════════════════════════════════════════ */
 window._SRV = {
   _socket: null,
-  _pending: {},   // { reqId: { resolve, reject, timer } }
+  _pending: {},
 
-  _attach(socket) {
-    this._socket = socket;
-
-    socket.on('srv-response', ({ reqId, ok, data, error }) => {
+  _attach(s) {
+    this._socket = s;
+    s.on('srv-response', ({ reqId, ok, data, error }) => {
       const p = this._pending[reqId];
       if (!p) return;
       clearTimeout(p.timer);
       delete this._pending[reqId];
-      if (ok) p.resolve(data);
-      else    p.reject(new Error(error || 'srv error'));
+      ok ? p.resolve(data) : p.reject(new Error(error || 'srv-error'));
     });
   },
 
-  _emit(event, payload) {
+  _call(event, payload) {
     return new Promise((resolve, reject) => {
-      if (!this._socket || !this._socket.connected) {
-        reject(new Error('Sin conexión al servidor'));
-        return;
-      }
+      if (!this._socket || !this._socket.connected) { reject(new Error('Sin conexión')); return; }
       const reqId = Math.random().toString(36).slice(2);
-      const timer = setTimeout(() => {
-        delete this._pending[reqId];
-        reject(new Error('Timeout'));
-      }, 12000);
-      this._pending[reqId] = { resolve, reject, timer };
+      this._pending[reqId] = {
+        resolve, reject,
+        timer: setTimeout(() => { delete this._pending[reqId]; reject(new Error('Timeout')); }, 12000)
+      };
       this._socket.emit(event, { ...payload, reqId });
     });
   },
 
   saveProject(data, silent) {
     const userId = window._CD_userId || 'anon';
-    this._emit('srv-save', { userId, data }).then(res => {
-      if (!silent) {
-        toast('☁️ Guardado en servidor');
-        addLog('info', `☁️ Proyecto "${data.projectName}" guardado.`);
-      }
-    }).catch(err => {
-      toast('⚠️ Error al guardar: ' + err.message, 4000);
-    });
+    this._call('srv-save', { userId, data })
+      .then(() => { if (!silent) toast('☁️ Guardado en servidor'); })
+      .catch(e => toast('⚠ Error al guardar: ' + e.message));
   },
-
-  listProjects() {
-    const userId = window._CD_userId || 'anon';
-    return this._emit('srv-list', { userId });
-  },
-
-  loadProject(id) {
-    const userId = window._CD_userId || 'anon';
-    return this._emit('srv-load', { userId, id });
-  },
-
-  clearProjects() {
-    const userId = window._CD_userId || 'anon';
-    return this._emit('srv-clear', { userId });
-  },
+  listProjects()  { return this._call('srv-list',  { userId: window._CD_userId || 'anon' }); },
+  loadProject(id) { return this._call('srv-load',  { userId: window._CD_userId || 'anon', id }); },
+  clearProjects() { return this._call('srv-clear', { userId: window._CD_userId || 'anon' }); },
 };
 
-/* ═══════════════════════════════════════════════════════════
-   CO-DIRECTOR — Colaboración en tiempo real
-═══════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════
+   CD  —  Co-Director
+══════════════════════════════════════════════════ */
 const CD = {
-  socket:         null,
-  connected:      false,
-  mode:           'host',
-  myName:         'Director',
-  sessionCode:    null,
-  isHost:         false,
-  selectedProjId: null,   // ID del proyecto en servidor
-  _cursors:       {},
-  _broadcasting:  false,
-  _peers:         {},     // { socketId: profileData }
-  _cmdPatchDone:  false,
+  socket:        null,
+  connected:     false,
+  mode:          'host',
+  myName:        'Director',
+  sessionCode:   null,
+  isHost:        false,
+  selectedProjId: null,
+  _peers:        {},
+  _cursors:      {},
+  _broadcasting: false,
+  _cmdPatchDone: false,
 
-  /* ── Abrir modal ── */
+  /* ── abrir ── */
   open() {
-    const prof = this._getProfile();
+    const name = this._getProfile().name || 'Director';
     const inp  = document.getElementById('cd-my-name');
-    if (inp && prof.name) inp.value = prof.name;
-    this._loadServerUrl();        // primero cargar URL guardada
-    this._populateProjects();     // después usarla para listar proyectos
+    if (inp) inp.value = name;
+    this.myName = name;
+
+    // cargar URL guardada
+    const saved = localStorage.getItem('dg_server_url') || '';
+    if (saved) {
+      window._DG_SERVER_URL = saved;
+      const el = document.getElementById('cd-server-url');
+      if (el) el.value = saved;
+    }
+
     document.getElementById('cd-overlay').classList.add('open');
+
+    // cargar proyectos si ya hay URL
+    if (window._DG_SERVER_URL) this._loadProjects();
   },
+
   close() { document.getElementById('cd-overlay').classList.remove('open'); },
 
-  /* ── Cargar lista de proyectos del servidor ── */
-  _populateProjects() {
+  _onUrlChange(val) {
+    const v = val.trim();
+    window._DG_SERVER_URL = v || '';
+    try { v ? localStorage.setItem('dg_server_url', v) : localStorage.removeItem('dg_server_url'); } catch(e) {}
+    // Limpiar lista para que recargue con nueva URL
+    const list = document.getElementById('cd-proj-list');
+    if (list) list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">↻ Cargando…</div>';
+    clearTimeout(this._urlDebounce);
+    if (v) this._urlDebounce = setTimeout(() => this._loadProjects(), 800);
+  },
+
+  /* ── lista de proyectos ── */
+  _loadProjects() {
     const list = document.getElementById('cd-proj-list');
     if (!list) return;
-
-    const serverUrl = (window._DG_SERVER_URL || '').trim();
-
-    // Sin URL configurada → pedir que la ingresen
-    if (!serverUrl) {
-      list.innerHTML = '<div style="font-size:11px;color:rgba(251,188,4,.7);text-align:center;padding:12px 8px;line-height:1.6;">Ingresá la URL de tu servidor Render<br><span style="opacity:.6">para ver y compartir proyectos</span></div>';
+    const url = (window._DG_SERVER_URL || '').trim();
+    if (!url) {
+      list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">Ingresá la URL del servidor</div>';
       return;
     }
+    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">⏳ Conectando…</div>';
 
-    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⏳ Cargando proyectos…</div>';
-
-    // Si ya hay socket conectado, usarlo directamente
-    if (window._SRV._socket && window._SRV._socket.connected) {
-      this._loadProjList(list);
-      return;
-    }
-
-    // Conectar temporalmente solo para listar
-    let tmpSock;
-    try {
-      tmpSock = io(serverUrl, { transports: ['websocket', 'polling'], timeout: 8000 });
-    } catch(e) {
-      list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.8);text-align:center;padding:12px;">❌ URL inválida</div>';
-      return;
-    }
-    tmpSock.once('connect', () => {
-      window._SRV._attach(tmpSock);
-      this._loadProjList(list);
-    });
-    tmpSock.once('connect_error', (err) => {
-      const msg = err && err.message ? err.message : 'Error de red';
-      list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.8);text-align:center;padding:10px 8px;line-height:1.6;">⚠️ Sin conexión al servidor<br><span style="font-size:9.5px;opacity:.6;">' + msg + '</span></div>';
+    this._getTempSocket(url, (err, sock) => {
+      if (err) {
+        list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.7);text-align:center;padding:10px;">⚠ Sin conexión: ' + err + '</div>';
+        return;
+      }
+      window._SRV._attach(sock);
+      window._SRV.listProjects().then(projects => {
+        if (!projects || !projects.length) {
+          list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:10px;">Sin proyectos guardados</div>';
+          return;
+        }
+        list.innerHTML = projects.map(p => {
+          const d = p.savedAt ? new Date(p.savedAt).toLocaleDateString('es') : '';
+          return '<div class="cd-proj-item" data-id="' + p.id + '" onclick="CD.selectProject(\'' + p.id + '\',\'' + (p.projectName||'').replace(/'/g,"\\'") + '\')">' +
+            '<div class="cd-proj-icon">☁️</div>' +
+            '<div class="cd-proj-info"><div class="cd-proj-name">' + (p.projectName||'Sin título') + '</div><div class="cd-proj-date">' + d + '</div></div>' +
+            '<div class="cd-proj-check" id="cdpc-' + p.id + '" style="display:none">✓</div></div>';
+        }).join('');
+      }).catch(e => {
+        list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.7);text-align:center;padding:10px;">⚠ Error: ' + e.message + '</div>';
+      });
     });
   },
 
-  _loadProjList(list) {
-    window._SRV.listProjects().then(projects => {
-      if (!projects || !projects.length) {
-        list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">Sin proyectos guardados en servidor</div>';
-        return;
-      }
-      list.innerHTML = projects.map(p => {
-        const date = p.savedAt ? new Date(p.savedAt).toLocaleDateString('es') : '';
-        return `<div class="cd-proj-item" data-id="${p.id}" onclick="CD.selectProject('${p.id}','${(p.projectName||'').replace(/'/g,"\\'")}')">
-          <div class="cd-proj-icon">☁️</div>
-          <div class="cd-proj-info">
-            <div class="cd-proj-name">${p.projectName || 'Sin título'}</div>
-            <div class="cd-proj-date">${date}</div>
-          </div>
-          <div class="cd-proj-check" id="cdpc-${p.id}" style="display:none;">✓</div>
-        </div>`;
-      }).join('');
-    }).catch(() => {
-      list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⚠️ Error cargando proyectos</div>';
-    });
+  /* Obtener o reusar socket temporal para listar */
+  _getTempSocket(url, cb) {
+    if (this._tempSock && this._tempSock.connected && this._tempSockUrl === url) {
+      cb(null, this._tempSock); return;
+    }
+    if (this._tempSock) { this._tempSock.disconnect(); this._tempSock = null; }
+    let sock;
+    try { sock = io(url, { transports: ['websocket','polling'], timeout: 8000 }); }
+    catch(e) { cb(e.message); return; }
+    this._tempSock    = sock;
+    this._tempSockUrl = url;
+    const done = (err) => {
+      sock.off('connect', onOk);
+      sock.off('connect_error', onErr);
+      cb(err, err ? null : sock);
+    };
+    const onOk  = () => done(null);
+    const onErr = (e) => done(e && e.message ? e.message : 'Error de red');
+    sock.once('connect',       onOk);
+    sock.once('connect_error', onErr);
   },
 
   selectProject(id, name) {
@@ -21950,7 +21655,7 @@ const CD = {
     document.querySelectorAll('.cd-proj-check').forEach(el => el.style.display = 'none');
     const ck = document.getElementById('cdpc-' + id);
     if (ck) ck.style.display = 'block';
-    this._setStatus('yellow', `"${name || id}" seleccionado ✓`);
+    this._setStatus('yellow', '"' + (name||id) + '" seleccionado ✓');
   },
 
   selectMode(mode) {
@@ -21958,831 +21663,210 @@ const CD = {
     document.getElementById('cd-card-host').classList.toggle('active', mode === 'host');
     document.getElementById('cd-card-join').classList.toggle('active', mode === 'join');
     document.getElementById('cd-host-section').style.display = mode === 'host' ? 'block' : 'none';
-    document.getElementById('cd-join-section').style.display = mode === 'join' ? 'block' : 'none';
-    document.getElementById('cd-action-btn').textContent = mode === 'host' ? '✦ Crear sesión' : '🔗 Unirse';
-    this._setStatus('', 'Listo para conectar');
+    document.getElementById('cd-join-section').style.display = mode === 'join'  ? 'block' : 'none';
+    document.getElementById('cd-action-btn').textContent     = mode === 'host'  ? '✦ Crear sesión' : '🔗 Unirse';
+    this._setStatus('', 'Listo');
   },
 
   doAction() {
-    const prof = this._getProfile();
-    // Preferir el nombre del perfil guardado; el campo del modal es solo fallback
-    const inputName = (document.getElementById('cd-my-name').value || '').trim();
-    this.myName = prof.name || inputName || 'Director';
+    const inp = document.getElementById('cd-my-name');
+    this.myName = (inp && inp.value.trim()) || this._getProfile().name || 'Director';
     if (this.mode === 'host') this._createSession();
-    else this._joinSession();
+    else                      this._joinSession();
   },
 
   _createSession() {
     if (!this.selectedProjId) { this._setStatus('yellow', 'Seleccioná un proyecto primero'); return; }
-    this._setStatus('yellow', 'Conectando…');
     this._connect(() => {
       const code = this._genCode();
       this.sessionCode = code;
       this.isHost = true;
-      this.socket.emit('create-session', {
-        code,
-        name:    this.myName,
-        profile: this._getProfile(),
-      });
+      this.socket.emit('create-session', { code, name: this.myName, profile: this._getProfile() });
     });
   },
 
   _joinSession() {
     const code = (document.getElementById('cd-join-code').value || '').trim().toUpperCase();
     if (!code) { this._setStatus('yellow', 'Ingresá un código'); return; }
-    this._setStatus('yellow', 'Conectando…');
     this._connect(() => {
       this.sessionCode = code;
       this.isHost = false;
-      this.socket.emit('join-session', {
-        code,
-        name:    this.myName,
-        profile: this._getProfile(),
-      });
+      this.socket.emit('join-session', { code, name: this.myName, profile: this._getProfile() });
     });
   },
 
-  /* ── Conectar socket ── */
+  /* ── conexión principal ── */
   _connect(cb) {
-    if (this.socket) { this.socket.disconnect(); this.socket = null; }
+    const url = (window._DG_SERVER_URL || '').trim();
+    if (!url) { this._setStatus('red', 'Ingresá la URL del servidor'); return; }
 
-    // Si socket.io todavía no terminó de cargar (carga asíncrona), esperar hasta 5s
-    if (typeof io === 'undefined') {
-      this._setStatus('yellow', 'Cargando socket.io…');
-      let attempts = 0;
-      const wait = setInterval(() => {
-        attempts++;
-        if (typeof io !== 'undefined') {
-          clearInterval(wait);
-          this._doConnect(cb);
-        } else if (attempts >= 50) { // 50 × 100ms = 5s
-          clearInterval(wait);
-          this._setStatus('red', 'socket.io no disponible — verificá que el servidor esté corriendo');
-          this._log('❌ socket.io no cargó tras 5 segundos.');
-        }
-      }, 100);
-      return;
-    }
+    this._setStatus('yellow', 'Conectando…');
 
-    this._doConnect(cb);
-  },
-
-  _doConnect(cb) {
-    const serverUrl = (window._DG_SERVER_URL || '').trim();
-
-    if (!serverUrl) {
-      this._setStatus('red', 'Ingresá la URL del servidor en el campo de arriba');
-      this._log('❌ Sin URL de servidor configurada.');
-      return;
-    }
-
-    this._log('🔗 Conectando a ' + serverUrl + '…');
-
-    // Si el socket temporal de _populateProjects ya está conectado a la misma URL, reutilizarlo
-    if (window._SRV._socket && window._SRV._socket.connected &&
-        window._SRV._socket.io?.uri === serverUrl) {
-      this.socket = window._SRV._socket;
+    // Si el socket temporal ya está conectado a la misma URL, lo promovemos
+    if (this._tempSock && this._tempSock.connected && this._tempSockUrl === url) {
+      this.socket = this._tempSock;
+      this._tempSock = null;
       window._SRV._attach(this.socket);
-      this._attachHandlers(cb);
-      // Simular evento connect ya que ya está conectado
-      this._log('🔌 Reutilizando conexión existente');
+      this._bindSessionEvents();
+      this._log('🔌 Conectado (reutilizado)');
       cb();
       return;
     }
 
-    // Desconectar socket temporal si existe
-    if (window._SRV._socket && !this.socket) {
-      window._SRV._socket.disconnect();
-      window._SRV._socket = null;
-    }
+    // Descartar socket temporal si existe
+    if (this._tempSock) { this._tempSock.disconnect(); this._tempSock = null; }
+    if (this.socket)    { this.socket.disconnect(); this.socket = null; }
 
+    let sock;
     try {
-      this.socket = io(serverUrl, {
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 2000,
-        timeout: 10000,
-        withCredentials: false,
-      });
-    } catch(e) {
-      this._setStatus('red', 'Error al inicializar socket: ' + e.message);
-      this._log('❌ io() error: ' + e.message);
-      return;
-    }
-    window._SRV._attach(this.socket);
-    this._attachHandlers(cb);
+      sock = io(url, { transports: ['websocket','polling'], timeout: 10000, reconnection: true, reconnectionAttempts: 4 });
+    } catch(e) { this._setStatus('red', 'Error: ' + e.message); return; }
+
+    this.socket = sock;
+    window._SRV._attach(sock);
+    this._bindSessionEvents();
+
+    sock.once('connect', () => {
+      this._log('🔌 Conectado a ' + url);
+      cb();
+    });
+    sock.on('connect_error', (e) => {
+      this._setStatus('red', 'Sin conexión: ' + (e.message || 'error de red'));
+      this._log('❌ ' + (e.message || 'connect_error'));
+    });
   },
 
-  _attachHandlers(cb) {
+  _bindSessionEvents() {
+    const s = this.socket;
+    s.off('session-created'); s.off('session-joined'); s.off('error-msg');
+    s.off('peers-updated');   s.off('peer-profile');   s.off('project-load');
+    s.off('project-update');  s.off('cursor-move');    s.off('disconnect');
 
-    this.socket.on('connect', () => {
-      this._log('🔌 Conectado al servidor');
-      cb();
-    });
-    this.socket.on('connect_error', (err) => {
-      const msg = err && err.message ? err.message : 'Error de red';
-      this._setStatus('red', 'Sin conexión — ' + msg);
-      this._log('❌ connect_error: ' + msg);
-    });
-    this.socket.on('reconnect_attempt', (n) => {
-      this._setStatus('yellow', 'Reconectando… (intento ' + n + ')');
-    });
+    s.on('session-created', ({ code, peers }) => this._onSessionReady(code, peers));
+    s.on('session-joined',  ({ code, peers }) => this._onSessionReady(code, peers));
+    s.on('error-msg', msg => { this._setStatus('red', msg); this._log('❌ ' + msg); });
 
-    this.socket.on('session-created', ({ code, peers }) => this._onSessionReady(code, peers));
-    this.socket.on('session-joined',  ({ code, peers }) => this._onSessionReady(code, peers));
-    this.socket.on('error-msg', msg => { this._setStatus('red', msg); this._log('❌ ' + msg); });
-
-    // peers-updated: el servidor manda [{id, name, role, profile?}]
-    // Si el servidor no soporta profile aún, los pedimos por canal propio
-    this.socket.on('peers-updated', peers => {
-      // Contar cuántos peers conocíamos antes del merge
-      const prevPeerCount = Object.keys(this._peers).length;
+    s.on('peers-updated', peers => {
+      const prev = Object.keys(this._peers).length;
       this._mergePeers(peers);
-      // Asegurar que el propio perfil siempre esté actualizado en _peers
-      if (this.socket?.id) {
-        this._peers[this.socket.id] = {
-          ...(this._peers[this.socket.id] || {}),
-          profile: this._getProfile(),
-          name: this.myName,
-        };
-      }
+      if (s.id) this._peers[s.id] = { profile: this._getProfile(), name: this.myName };
       this._renderDirectors(peers);
-      this._log(`👥 ${peers.length} director${peers.length !== 1 ? 'es' : ''} en sesión`);
-
-      // HOST: reenviar el estado actual del proyecto cada vez que llega un nuevo guest
-      // Se detecta comparando el total actual vs el anterior
-      if (this.isHost && peers.length > prevPeerCount) {
-        // Pequeño delay para asegurar que el guest ya procesó la conexión
-        setTimeout(() => this._sendProjectToRoom(), 250);
-        // También reenviar nuestro perfil para que el nuevo guest lo vea
-        setTimeout(() => {
-          if (this.socket) {
-            this.socket.emit('peer-profile', {
-              sessionCode: this.sessionCode,
-              profile:     this._getProfile(),
-              name:        this.myName,
-            });
-          }
-        }, 400);
+      this._log('👥 ' + peers.length + ' director(es)');
+      if (this.isHost && peers.length > prev) {
+        setTimeout(() => this._sendProjectToRoom(), 300);
+        setTimeout(() => s.emit('peer-profile', { sessionCode: this.sessionCode, profile: this._getProfile(), name: this.myName }), 500);
       }
-
-      // Anunciar nuestro propio perfil a los nuevos
-      if (this.socket) {
-        this.socket.emit('peer-profile', {
-          sessionCode: this.sessionCode,
-          profile:     this._getProfile(),
-          name:        this.myName,
-        });
-      }
+      s.emit('peer-profile', { sessionCode: this.sessionCode, profile: this._getProfile(), name: this.myName });
     });
 
-    // Recibir perfiles de otros usuarios (canal propio, no depende del servidor)
-    this.socket.on('peer-profile', ({ fromId, profile, name }) => {
-      if (fromId && profile) {
-        if (!this._peers[fromId]) this._peers[fromId] = {};
-        this._peers[fromId].profile = profile;
-        // Usar el nombre del perfil (más fiable) o el nombre anunciado
-        this._peers[fromId].name = profile.name || name || this._peers[fromId].name;
-        this._refreshCards();
-      }
+    s.on('peer-profile', ({ fromId, profile, name }) => {
+      if (!fromId || !profile) return;
+      if (!this._peers[fromId]) this._peers[fromId] = {};
+      this._peers[fromId].profile = profile;
+      this._peers[fromId].name    = profile.name || name || this._peers[fromId].name;
+      this._refreshCards();
     });
 
-    // Si el servidor no retransmite peer-profile, el guest solicita perfiles al host
-    // y el host responde directamente
-    this.socket.on('request-profiles', ({ fromId }) => {
-      // Solo el host responde
-      if (!this.isHost || !this.socket) return;
-      this.socket.emit('peer-profile', {
-        sessionCode: this.sessionCode,
-        profile:     this._getProfile(),
-        name:        this.myName,
-        targetId:    fromId, // el servidor puede usar esto para routing
-      });
-    });
-
-    // Recibir proyecto (solo guests)
-    this.socket.on('project-load', data => {
+    s.on('project-load', data => {
       if (!this.isHost) {
         _applyProjectData(data, true);
-        this._log(`📂 Proyecto "${data.projectName}" recibido del host`);
+        this._log('📂 Proyecto recibido del host');
         toast('📂 Proyecto cargado desde el host');
       }
     });
 
-    // Recibir cambios en tiempo real
-    this.socket.on('project-update', data => {
-      // Ignorar echo del propio socket
-      if (data._fromSocketId && data._fromSocketId === this.socket?.id) return;
+    s.on('project-update', data => {
+      if (data._fromSocketId && data._fromSocketId === s.id) return;
       this._broadcasting = true;
       _applyProjectData(data, true);
-      // Si no es un update de drag, loguear
-      if (!data._isDragUpdate) {
-        this._log('🔄 Canvas actualizado por co-director');
-      }
-      // Reset después del rAF de _applyProjectData para no re-emitir el propio update
+      if (!data._isDragUpdate) this._log('🔄 Canvas actualizado');
       requestAnimationFrame(() => { this._broadcasting = false; });
     });
 
-    // Cursores remotos
-    this.socket.on('cursor-move', ({ id, name, x, y }) => this._updateCursor(id, name, x, y));
+    s.on('cursor-move', ({ id, name, x, y }) => this._updateCursor(id, name, x, y));
 
-    // ── Protocolo de texturas: request / chunk ──
-    // El receptor pide texturas por id; el emisor las envía en chunks de 200KB.
-    // Esto evita COMPLETAMENTE que base64 viaje en project-update y corte la conexión.
-
-    this.socket.on('texture-request', ({ assetId, objId, animIdx, frameIdx, fromId }) => {
-      // Solo responder si tenemos el asset
-      const asset = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(a => a.id === assetId);
-      let url = asset ? asset.url : null;
-
-      // Si no hay asset directo, buscar en objetos (spriteSheet, frames, gifUrl)
-      if (!url && objId) {
-        const o = STATE.objects.find(x => x.id === objId);
-        if (o) {
-          if (animIdx !== undefined && o.animations && o.animations[animIdx]) {
-            const anim = o.animations[animIdx];
-            if (frameIdx !== undefined && anim.frames && anim.frames[frameIdx]) {
-              url = anim.frames[frameIdx];
-            } else if (anim.gifUrl) {
-              url = anim.gifUrl;
-            }
-          } else if (o.spriteSheet && o.spriteSheet.url) {
-            url = o.spriteSheet.url;
-          } else if (o.imgUrl) {
-            url = o.imgUrl;
-          }
-        }
-      }
-
-      if (!url || !this.socket) return;
-
-      // Enviar en chunks de 200KB
-      const CHUNK = 200 * 1024; // 200KB en chars base64
-      const total = Math.ceil(url.length / CHUNK);
-      for (let i = 0; i < total; i++) {
-        const chunk = url.slice(i * CHUNK, (i + 1) * CHUNK);
-        this.socket.emit('texture-chunk', {
-          assetId, objId, animIdx, frameIdx,
-          chunk, chunkIdx: i, totalChunks: total,
-          sessionCode: this.sessionCode,
-          targetId: fromId,
-        });
-      }
-    });
-
-    this.socket.on('texture-chunk', ({ assetId, objId, animIdx, frameIdx, chunk, chunkIdx, totalChunks }) => {
-      // Acumular chunks
-      if (!this._texChunks) this._texChunks = {};
-      const key = [assetId, objId, animIdx, frameIdx].filter(x => x !== undefined).join(':');
-      if (!this._texChunks[key]) this._texChunks[key] = { parts: [], total: totalChunks };
-      this._texChunks[key].parts[chunkIdx] = chunk;
-
-      const acc = this._texChunks[key];
-      const received = acc.parts.filter(Boolean).length;
-      if (received < acc.total) return; // aún esperando chunks
-
-      // Todos los chunks llegaron → reconstruir URL
-      const url = acc.parts.join('');
-      delete this._texChunks[key];
-
-      // Aplicar al estado local
-      if (assetId && typeof ASSETS !== 'undefined') {
-        const asset = ASSETS.find(a => a.id === assetId);
-        if (asset) {
-          asset.url = url;
-          asset._hasTexture = true;
-          // Actualizar elementos en canvas que usen este asset
-          STATE.objects.forEach(o => {
-            if (o.assetId === assetId && typeof _applyObjImgUrl === 'function') {
-              o.imgUrl = url;
-              _applyObjImgUrl(o);
-            }
-          });
-        }
-      }
-      if (objId) {
-        const o = STATE.objects.find(x => x.id === objId);
-        if (o) {
-          if (animIdx !== undefined && o.animations && o.animations[animIdx]) {
-            const anim = o.animations[animIdx];
-            if (frameIdx !== undefined) {
-              if (!anim.frames) anim.frames = [];
-              anim.frames[frameIdx] = url;
-            } else {
-              anim.gifUrl = url;
-            }
-          } else if (!o.imgUrl || o.imgUrl.length < 300) {
-            o.imgUrl = url;
-            if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
-          } else if (o.spriteSheet) {
-            o.spriteSheet.url = url;
-            if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
-          }
-        }
-      }
-      if (typeof renderAssetGrid === 'function') renderAssetGrid();
-    });
-
-    this.socket.on('disconnect', () => {
-      this._log('🔌 Desconectado del servidor');
+    s.on('disconnect', () => {
+      this._log('🔌 Desconectado');
       if (this.connected) this._onDisconnect();
     });
   },
 
-  /* ── Sesión lista ── */
+  /* ── sesión lista ── */
   _onSessionReady(code, peers) {
     this.connected   = true;
     this.sessionCode = code;
 
-    document.getElementById('cd-pane-setup').style.display = 'none';
+    document.getElementById('cd-pane-setup').style.display     = 'none';
     document.getElementById('cd-pane-connected').style.display = 'flex';
     document.getElementById('cd-pane-connected').style.flexDirection = 'column';
 
     if (this.isHost) {
-      document.getElementById('cd-code-display').style.display = 'flex';
-      document.getElementById('cd-code-val').textContent = code;
+      document.getElementById('cd-code-display').style.display = 'block';
+      document.getElementById('cd-code-val').textContent       = code;
     }
 
     this._mergePeers(peers);
-    // Guardar propio perfil en _peers usando el socket id actual
-    if (this.socket?.id) {
-      this._peers[this.socket.id] = {
-        ...(this._peers[this.socket.id] || {}),
-        profile: this._getProfile(),
-        name: this.myName,
-      };
-    }
+    if (this.socket?.id) this._peers[this.socket.id] = { profile: this._getProfile(), name: this.myName };
     this._renderDirectors(peers);
     this._setStatus2('green', 'Sesión activa');
-    this._log(`✅ Sesión ${this.isHost ? 'creada' : 'unida'}: ${code}`);
+    this._log('✅ Sesión ' + (this.isHost ? 'creada' : 'unida') + ': ' + code);
     this._updateTopBtn(true);
 
-    // HOST: cargar proyecto del servidor y enviarlo a la sala
     if (this.isHost && this.selectedProjId) {
       window._SRV.loadProject(this.selectedProjId).then(data => {
         if (!data) return;
         _applyProjectData(data, true);
-        // Registrar assets conocidos para que _buildLightPayload detecte novedades
-        this._lastSyncedAssetIds = new Set((data.assets || []).map(a => a.id));
         this.socket.emit('project-load', data);
-        this._log(`📤 Proyecto "${data.projectName}" enviado a la sala`);
+        this._log('📤 Proyecto enviado a la sala');
       });
     }
 
-    // Anunciar nuestro perfil
     setTimeout(() => {
-      if (this.socket) {
-        this.socket.emit('peer-profile', {
-          sessionCode: code,
-          profile:     this._getProfile(),
-          name:        this.myName,
-        });
-        // Si somos guest, también pedimos los perfiles existentes
-        if (!this.isHost) {
-          this.socket.emit('request-profiles', {
-            sessionCode: code,
-            fromId:      this.socket.id,
-          });
-        }
-      }
+      if (!this.socket) return;
+      this.socket.emit('peer-profile', { sessionCode: code, profile: this._getProfile(), name: this.myName });
     }, 300);
 
-    // Hookear CommandHistory para sync automático (host y guests)
     this._patchCommandHistory();
   },
 
-  /* ── Enviar proyecto a la sala ──
-     _buildSaveData() ya excluye todo base64 — el payload nunca supera ~50KB.
-     Las texturas viajan por separado via texture-request/chunk.            ── */
   _sendProjectToRoom() {
     if (!this.socket) return;
     const data = _buildSaveData();
     data._fromSocketId = this.socket.id;
     data._sessionCode  = this.sessionCode;
     this.socket.emit('project-update', data);
-    this._log('📤 Estado sincronizado (texturas se sincronizan bajo demanda)');
   },
 
-  /* ── Anunciar cambio de estado (sin texturas) ── */
-  /* Emite un project-update liviano para que el receptor sepa que el estado cambió
-     y pueda pedir las texturas que le faltan via texture-request.              */
   _announceUpdate() {
     if (!this.connected || !this.socket) return;
     clearTimeout(this._announceTimer);
     this._announceTimer = setTimeout(() => {
       if (!this.connected || !this.socket) return;
-      const payload = _buildSaveData(); // sin base64
-      payload._fromSocketId = this.socket.id;
-      payload._sessionCode  = this.sessionCode;
-      this.socket.emit('project-update', payload);
-      this._log('📦 Textura disponible — receptor la pedirá');
-    }, 300);
+      const d = _buildSaveData();
+      d._fromSocketId = this.socket.id;
+      d._sessionCode  = this.sessionCode;
+      d._isDragUpdate = false;
+      this.socket.emit('project-update', d);
+    }, 120);
   },
 
-  /* ── Payload de update incremental ──
-     _buildSaveData() ya excluye todo base64.
-     Solo agregamos metadatos de routing.         ── */
-  _buildLightPayload() {
-    const data = _buildSaveData();
-    data._fromSocketId = this.socket?.id;
-    data._sessionCode  = this.sessionCode;
-    return data;
-  },
-
-  /* ── Hookear CommandHistory + canvasMove para sync en tiempo real ── */
   _patchCommandHistory() {
     if (this._cmdPatchDone) return;
     this._cmdPatchDone = true;
-
-    // Emit completo (con debounce) — cualquier participante puede emitir
-    const _emit = () => {
-      if (!this.connected || this._broadcasting || !this.socket) return;
-      clearTimeout(this._syncTimer);
-      this._syncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket) return;
-        const payload = this._buildLightPayload();
-        this.socket.emit('project-update', payload);
-      }, 180);
+    const orig = window.CommandHistory;
+    if (!orig) return;
+    const _origPush = orig.push.bind(orig);
+    orig.push = (cmd) => {
+      _origPush(cmd);
+      if (!this._broadcasting) this._announceUpdate();
     };
-
-    // Emit liviano durante drag — cualquier participante puede emitir
-    const _emitDrag = () => {
-      if (!this.connected || this._broadcasting || !this.socket) return;
-      clearTimeout(this._dragSyncTimer);
-      this._dragSyncTimer = setTimeout(() => {
-        if (!this.connected || !this.socket) return;
-        const payload = this._buildLightPayload();
-        payload._isDragUpdate = true;
-        this.socket.emit('project-update', payload);
-      }, 40);
-    };
-
-    // 1) CommandHistory.execute — add, delete, setprop vía inspector
-    const origExec = CommandHistory.execute.bind(CommandHistory);
-    CommandHistory.execute = (cmd) => { origExec(cmd); _emit(); };
-
-    // 2) undo / redo
-    const origUndo = CommandHistory.undo.bind(CommandHistory);
-    CommandHistory.undo = () => { origUndo(); _emit(); };
-
-    const origRedo = CommandHistory.redo.bind(CommandHistory);
-    CommandHistory.redo = () => { origRedo(); _emit(); };
-
-    // 3) _stack.push directo — canvasUp (drag final) y startResize
-    const origPush = CommandHistory._stack.push.bind(CommandHistory._stack);
-    CommandHistory._stack.push = (...args) => {
-      const r = origPush(...args);
-      _emit();
-      return r;
-    };
-
-    // 4) canvasMove — emit liviano durante drag para sincronización en tiempo real
-    const origCanvasMove = window.canvasMove;
-    if (typeof origCanvasMove === 'function') {
-      window.canvasMove = (e) => {
-        origCanvasMove(e);
-        // Solo emitir si hay un objeto siendo arrastrado
-        if (typeof dragging !== 'undefined' && dragging) _emitDrag();
-      };
-    }
-
-    // 5) canvasUp — emit final al soltar (estado definitivo)
-    const origCanvasUp = window.canvasUp;
-    if (typeof origCanvasUp === 'function') {
-      window.canvasUp = (e) => {
-        origCanvasUp(e);
-        _emit(); // emit final con debounce normal para tiles y otros cambios
-      };
-    }
-
-    // 6) Teclado: Delete / Backspace
-    document.addEventListener('keyup', (e) => {
-      if (!this.connected || this._broadcasting) return;
-      if (['Delete','Backspace'].includes(e.key)) _emit();
-    });
-  },
-
-  /* ── Merge peers con perfiles conocidos ── */
-  _mergePeers(peers) {
-    peers.forEach(p => {
-      if (!this._peers[p.id]) this._peers[p.id] = {};
-      if (p.profile) {
-        this._peers[p.id].profile = p.profile;
-        // Si el perfil tiene nombre real, usarlo
-        if (p.profile.name) this._peers[p.id].name = p.profile.name;
-      }
-      if (p.name) this._peers[p.id].name = this._peers[p.id].name || p.name;
-      if (p.role) this._peers[p.id].role = p.role;
-    });
-  },
-
-  /* ── Refrescar cards sin re-renderizar todo ── */
-  _refreshCards() {
-    const grid = document.getElementById('cd-directors-grid');
-    if (!grid) return;
-    // Re-render con los datos actualizados (incluye id, name, role, profile)
-    const myId = this.socket?.id;
-    const peers = Object.entries(this._peers).map(([id, p]) => {
-      const isMe = id === myId;
-      return {
-        id,
-        name:    isMe ? (this._getProfile().name || this.myName) : p.name,
-        role:    p.role,
-        profile: isMe ? this._getProfile() : p.profile,
-      };
-    });
-    if (peers.length) this._renderDirectors(peers);
-  },
-
-  /* ── Render tarjetas idénticas a las de perfil (dp-card) ── */
-  _renderDirectors(peersIn) {
-    const grid = document.getElementById('cd-directors-grid');
-    if (!grid) return;
-    const myId = this.socket?.id;
-
-    // Enriquecer cada peer con lo que tenemos cacheado en _peers
-    // (el servidor a veces no manda profile en peers-updated)
-    // ORDEN CORRECTO: cached.profile viene del canal peer-profile (más completo: foto, titulo, tema)
-    // p.profile viene del servidor peers-updated (parcial). El caché DEBE ganar.
-    const peers = peersIn.map(p => {
-      const cached = this._peers[p.id] || {};
-      const isMe   = p.id === this.socket?.id;
-      return {
-        ...p,
-        name:    isMe ? (this._getProfile().name || this.myName) : (cached.profile?.name || cached.name || p.name),
-        profile: isMe
-          ? this._getProfile()
-          : Object.assign({}, p.profile || {}, cached.profile || {}), // caché sobre server — correcto
-      };
-    });
-
-    // Inyectar estilos si no existen — copia exacta de dp-card
-    if (!document.getElementById('cd-3d-style')) {
-      const s = document.createElement('style');
-      s.id = 'cd-3d-style';
-      s.textContent = `
-        @keyframes cd-ring-spin { to { filter: hue-rotate(360deg); } }
-        .cds-scene {
-          width: 160px; height: 220px;
-          perspective: 900px; cursor: pointer;
-          flex-shrink: 0; user-select: none;
-        }
-        .cds-card {
-          width: 100%; height: 100%;
-          position: relative; transform-style: preserve-3d;
-          transition: transform .6s cubic-bezier(.4,0,.2,1);
-          border-radius: 18px;
-        }
-        .cds-scene:hover .cds-card { transform: rotateY(8deg) rotateX(-4deg) scale(1.04); }
-        .cds-card.flipped          { transform: rotateY(180deg) !important; }
-        .cds-front, .cds-back {
-          position: absolute; inset: 0;
-          backface-visibility: hidden; -webkit-backface-visibility: hidden;
-          border-radius: 18px; overflow: hidden;
-        }
-        .cds-back { transform: rotateY(180deg); }
-        /* Front */
-        .cds-front {
-          display: flex; flex-direction: column;
-          align-items: center; padding: 16px 12px 14px; gap: 8px;
-          box-shadow: 0 0 0 1px rgba(102,157,246,.1), 0 20px 60px rgba(0,0,0,.7),
-                      inset 0 1px 0 rgba(255,255,255,.07);
-        }
-        /* holographic shimmer */
-        .cds-front::before {
-          content: ''; position: absolute; inset: 0; border-radius: 18px;
-          background: linear-gradient(125deg, transparent 30%, rgba(102,157,246,.06) 45%,
-            rgba(168,85,247,.08) 55%, transparent 70%);
-          pointer-events: none; opacity: 0; transition: opacity .3s;
-        }
-        .cds-scene:hover .cds-front::before { opacity: 1; }
-        /* scan lines */
-        .cds-front::after {
-          content: ''; position: absolute; inset: 0; border-radius: 18px;
-          background: repeating-linear-gradient(0deg, transparent, transparent 2px,
-            rgba(0,0,0,.08) 2px, rgba(0,0,0,.08) 4px);
-          pointer-events: none;
-        }
-        /* Back */
-        .cds-back {
-          display: flex; flex-direction: column;
-          align-items: center; justify-content: center;
-          gap: 8px; padding: 16px;
-          box-shadow: 0 20px 60px rgba(0,0,0,.7);
-        }
-        .cds-header {
-          width: 100%; display: flex; align-items: center; justify-content: space-between;
-          font-size: 7.5px; font-weight: 700; letter-spacing: 1.5px;
-          text-transform: uppercase; color: rgba(102,157,246,.7);
-          font-family: 'Roboto Mono', monospace; position: relative; z-index: 1;
-        }
-        .cds-header-badge {
-          background: rgba(52,168,83,.15); border: 1px solid rgba(52,168,83,.3);
-          color: #34a853; border-radius: 4px; padding: 1px 5px;
-          font-size: 6.5px; letter-spacing: 1px;
-        }
-        .cds-ring {
-          width: 72px; height: 72px; border-radius: 50%; padding: 3px;
-          position: relative; z-index: 1;
-          animation: cd-ring-spin 8s linear infinite; flex-shrink: 0;
-        }
-        .cds-inner {
-          width: 100%; height: 100%; border-radius: 50%;
-          display: flex; align-items: center; justify-content: center;
-          overflow: hidden; font-size: 32px; border: 2px solid transparent;
-        }
-        .cds-inner img   { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
-        .cds-inner canvas{ width:100%; height:100%; border-radius:50%; image-rendering:pixelated; }
-        .cds-name {
-          font-family: 'Google Sans Display', 'Google Sans', sans-serif;
-          font-size: 12px; font-weight: 700; color: #e6e1e5;
-          text-align: center; position: relative; z-index: 1;
-          text-shadow: 0 0 20px rgba(102,157,246,.4); letter-spacing: .3px;
-          max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .cds-role {
-          font-size: 7.5px; color: rgba(102,157,246,.8);
-          font-family: 'Roboto Mono', monospace;
-          letter-spacing: .8px; text-transform: uppercase; position: relative; z-index: 1;
-        }
-        .cds-divider {
-          width: 80%; height: 1px; position: relative; z-index: 1;
-          background: linear-gradient(90deg, transparent, rgba(102,157,246,.3), transparent);
-        }
-        .cds-badge {
-          font-size: 6.5px; font-weight: 700; letter-spacing: .8px;
-          padding: 2px 7px; border-radius: 4px; position: relative; z-index: 1;
-        }
-        .cds-badge.host  { background:rgba(139,92,246,.2);  border:1px solid rgba(139,92,246,.4);  color:#c084fc; }
-        .cds-badge.guest { background:rgba(52,168,83,.15);  border:1px solid rgba(52,168,83,.35);  color:#4ade80; }
-        .cds-you {
-          font-size: 7px; color: rgba(255,255,255,.4); background: rgba(255,255,255,.08);
-          border-radius: 5px; padding: 2px 6px; position: relative; z-index: 1;
-        }
-        .cds-uid {
-          font-size: 7px; color: rgba(255,255,255,.18);
-          font-family: 'Roboto Mono', monospace; letter-spacing: 1px;
-          position: relative; z-index: 1; margin-top: auto;
-        }
-        /* Back face contents */
-        .cds-qr {
-          width: 52px; height: 52px; background: white; border-radius: 5px;
-          display: flex; align-items: center; justify-content: center; padding: 3px;
-        }
-        .cds-qr canvas { image-rendering: pixelated; }
-        .cds-back-lbl {
-          font-size: 7.5px; color: rgba(102,157,246,.6);
-          font-family: 'Roboto Mono', monospace; letter-spacing: 1px; text-align: center;
-        }
-        .cds-back-name {
-          font-size: 8px; color: rgba(255,255,255,.35);
-          font-family: 'Roboto Mono', monospace; text-align: center; letter-spacing: .5px;
-        }
-        .cds-hint {
-          font-size: 8px; color: rgba(255,255,255,.2);
-          font-family: 'Roboto Mono', monospace; text-align: center;
-          letter-spacing: .5px; margin-top: 4px;
-        }
-      `;
-      document.head.appendChild(s);
-    }
-
-    // Usar exactamente DP_CARD_THEMES_CSS (mismos temas que la tarjeta de perfil)
-    const THEMES = typeof DP_CARD_THEMES_CSS !== 'undefined' ? DP_CARD_THEMES_CSS : {
-      1: { bg:'linear-gradient(145deg,#1a1825 0%,#2a2640 50%,#1e1c2e 100%)', border:'rgba(102,157,246,.25)', ring:'#1a73e8,#a855f7,#34a853,#fbbc04,#1a73e8', inner:'#1a1825' },
-    };
-
-    grid.innerHTML = peers.map(p => {
-      const isMe   = p.id === myId;
-      const cached = this._peers[p.id] || {};
-
-      // Perfil: para el propio siempre desde _getProfile() (localStorage).
-      // Para peers remotos: fusionar lo que llegó del servidor con el caché local,
-      // priorizando el caché porque viene del canal peer-profile (más completo).
-      const prof = isMe
-        ? this._getProfile()
-        : Object.assign({}, p.profile || {}, cached.profile || {});
-
-      // Nombre: priorizar el del perfil (que tiene el nombre real del usuario),
-      // luego el caché, luego lo que mandó el servidor.
-      const displayName = (isMe ? (this._getProfile().name || this.myName) : (cached.profile?.name || cached.name || p.name)) || 'Director';
-
-      const tn  = prof.cardTheme || 1;
-      const t   = THEMES[tn] || THEMES[1];
-      const cid = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
-      const uid = 'DG-' + btoa(displayName).replace(/[^A-Z0-9]/g,'').slice(0,8).padEnd(8,'0');
-
-      // Avatar HTML — idéntico a dpRenderCard
-      let avHtml = '';
-      if (prof.avatarType === 'photo' && prof.photoDataUrl) {
-        avHtml = `<img src="${prof.photoDataUrl}" alt="${displayName}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">`;
-      } else if (prof.avatarType === 'pixel' && prof.avatarId) {
-        avHtml = `<canvas id="${cid}_av" width="64" height="64" style="width:100%;height:100%;border-radius:50%;image-rendering:pixelated;"></canvas>`;
-      } else {
-        const EMOJIS = ['🎬','🎮','🎯','⚡','🔥','🌊','🎲','🦾','🚀','💎'];
-        avHtml = `<span style="font-size:30px;line-height:1;">${prof.avatarEmoji || EMOJIS[(displayName||'D').charCodeAt(0) % EMOJIS.length]}</span>`;
-      }
-
-      return `
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
-          <div class="cds-scene" id="${cid}_scene" onclick="CD._flipCard('${cid}')">
-            <div class="cds-card" id="${cid}">
-
-              <!-- FRONT — idéntico a dp-card-front -->
-              <div class="cds-front" style="background:${t.bg};border:1px solid ${t.border};">
-                <div class="cds-header">
-                  <span>Director Gamer</span>
-                  <span class="cds-header-badge">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</span>
-                </div>
-                <div class="cds-ring" style="background:conic-gradient(${t.ring});">
-                  <div class="cds-inner" style="background:${t.inner};border-color:${t.inner};">
-                    ${avHtml}
-                  </div>
-                </div>
-                <div class="cds-name">${displayName}</div>
-                <div class="cds-role">${prof.title || (p.role === 'Host' ? 'Game Director' : 'Co-Director')}</div>
-                <div class="cds-divider"></div>
-                <div class="cds-badge ${p.role === 'Host' ? 'host' : 'guest'}">${p.role === 'Host' ? 'HOST' : 'CO-DIR'}</div>
-                ${isMe ? '<div class="cds-you">● Tú</div>' : ''}
-                <div class="cds-uid">${uid}</div>
-              </div>
-
-              <!-- BACK — idéntico a dp-card-back -->
-              <div class="cds-back" style="background:${t.bg};border:1px solid ${t.border};">
-                <div class="cds-back-lbl">DIRECTOR GAMER<br>CREDENTIAL CARD</div>
-                <div class="cds-qr"><canvas id="${cid}_qr" width="46" height="46"></canvas></div>
-                <div class="cds-back-name">${uid}<br>${p.name || 'Director'}</div>
-                <div style="width:80%;height:1px;background:rgba(102,157,246,.2);"></div>
-                <div style="font-size:7px;color:rgba(255,255,255,.12);font-family:'Roboto Mono',monospace;">NO TRANSFERIBLE</div>
-              </div>
-
-            </div>
-          </div>
-          <div class="cds-hint">click para girar ↩</div>
-        </div>`;
-    }).join('');
-
-    // Post-render: pixel avatars, QR, tilt — igual que dpRenderCard
-    requestAnimationFrame(() => {
-      peers.forEach(p => {
-        const isMe2  = p.id === myId;
-        const cached = this._peers[p.id] || {};
-        const prof   = isMe2 ? this._getProfile() : Object.assign({}, p.profile || {}, cached.profile || {});
-        const cid    = 'cdc_' + (p.id || '').replace(/[^a-z0-9]/gi, '_');
-
-        // Pixel avatar
-        if (prof.avatarType === 'pixel' && prof.avatarId && typeof DP_PIXEL_AVATARS !== 'undefined') {
-          const c  = document.getElementById(cid + '_av');
-          const av = DP_PIXEL_AVATARS.find(a => a.id === prof.avatarId) || DP_PIXEL_AVATARS[0];
-          if (c && av && typeof dpDrawPixelAvatar === 'function') dpDrawPixelAvatar(c, av, 64);
-        }
-
-        // QR decorativo — mismo algoritmo que dpDrawQR
-        const qc = document.getElementById(cid + '_qr');
-        if (qc) {
-          const ctx = qc.getContext('2d');
-          const s = 3;
-          ctx.fillStyle = '#fff'; ctx.fillRect(0,0,46,46);
-          const seed = (p.name || 'D').split('').reduce((a,ch)=>a*31+ch.charCodeAt(0),7);
-          const bit = i => (seed>>(i%32)&1)||((i*7+13)%3===0)?1:0;
-          ctx.fillStyle = '#111';
-          let i = 0;
-          for (let row=0;row<11;row++) for (let col=0;col<11;col++) {
-            const inCorner=(row<3&&col<3)||(row<3&&col>7)||(row>7&&col<3);
-            const inInner=(row===1&&col===1)||(row===1&&col===9)||(row===9&&col===1);
-            if (inCorner) { ctx.fillStyle='#111'; ctx.fillRect(col*s,row*s,s,s); }
-            else if (inInner) { ctx.fillStyle='#fff'; ctx.fillRect(col*s,row*s,s,s); }
-            else if (bit(i++)) { ctx.fillStyle='#111'; ctx.fillRect(col*s,row*s,s,s); }
-            i++;
-          }
-        }
-
-        // Tilt — mismo efecto que dpInitTilt
-        const scene = document.getElementById(cid + '_scene');
-        const card  = document.getElementById(cid);
-        if (scene && card) {
-          scene.addEventListener('mousemove', e => {
-            if (card.classList.contains('flipped')) return;
-            const r = scene.getBoundingClientRect();
-            const x = (e.clientX - r.left) / r.width  - 0.5;
-            const y = (e.clientY - r.top)  / r.height - 0.5;
-            card.style.transform = `rotateY(${x*22}deg) rotateX(${-y*16}deg) scale(1.04)`;
-          });
-          scene.addEventListener('mouseleave', () => {
-            if (!card.classList.contains('flipped')) card.style.transform = '';
-          });
-        }
+    ['keyup','mouseup','pointerup'].forEach(ev => {
+      document.addEventListener(ev, () => {
+        if (this.connected && !this._broadcasting) this._announceUpdate();
       });
     });
   },
 
-  _flipCard(cid) {
-    const card = document.getElementById(cid);
-    if (card) card.classList.toggle('flipped');
-  },
-
-  /* ── Desconectar ── */
   disconnect() {
     if (this.socket) { this.socket.disconnect(); this.socket = null; }
     this._onDisconnect();
@@ -22790,100 +21874,113 @@ const CD = {
   },
 
   _onDisconnect() {
-    this.connected      = false;
-    this.isHost         = false;
-    this.sessionCode    = null;
-    this._peers         = {};
-    this._cmdPatchDone  = false;
+    this.connected   = false;
+    this.isHost      = false;
+    this.sessionCode = null;
+    this._peers      = {};
+    this._cmdPatchDone = false;
     this._clearCursors();
     this._updateTopBtn(false);
-    document.getElementById('cd-pane-setup').style.display    = 'block';
+    document.getElementById('cd-pane-setup').style.display     = 'block';
     document.getElementById('cd-pane-connected').style.display = 'none';
     this._setStatus('', 'Desconectado');
     toast('👥 Co-Director desconectado');
   },
 
-  /* ── Cursores remotos ── */
+  /* ── cursores ── */
   _updateCursor(id, name, x, y) {
-    // Nunca crear cursor para el propio socket
     if (id === this.socket?.id) return;
     if (!this._cursors[id]) {
       const el = document.createElement('div');
       el.className = 'cd-remote-cursor';
-      el.innerHTML = `<div class="cd-cursor-dot"></div><div class="cd-cursor-label">${name}</div>`;
+      el.innerHTML = '<div class="cd-cursor-dot"></div><div class="cd-cursor-label">' + name + '</div>';
       document.body.appendChild(el);
       this._cursors[id] = el;
     }
     this._cursors[id].style.left = x + 'px';
     this._cursors[id].style.top  = y + 'px';
   },
-  _clearCursors() {
-    Object.values(this._cursors).forEach(el => el.remove());
-    this._cursors = {};
+  _clearCursors() { Object.values(this._cursors).forEach(el => el.remove()); this._cursors = {}; },
+
+  /* ── peers ── */
+  _mergePeers(peers) {
+    peers.forEach(p => {
+      if (!this._peers[p.id]) this._peers[p.id] = {};
+      if (p.profile) { this._peers[p.id].profile = p.profile; if (p.profile.name) this._peers[p.id].name = p.profile.name; }
+      if (p.name) this._peers[p.id].name = this._peers[p.id].name || p.name;
+      if (p.role) this._peers[p.id].role = p.role;
+    });
+  },
+  _refreshCards() {
+    const grid = document.getElementById('cd-directors-grid');
+    if (!grid || !this.socket) return;
+    const peers = Object.entries(this._peers).map(([id, p]) => ({
+      id, name: id === this.socket.id ? (this._getProfile().name || this.myName) : p.name,
+      role: p.role, profile: id === this.socket.id ? this._getProfile() : p.profile,
+    }));
+    if (peers.length) this._renderDirectors(peers);
+  },
+  _renderDirectors(peers) {
+    const grid = document.getElementById('cd-directors-grid');
+    if (!grid) return;
+    const myId = this.socket?.id;
+    grid.innerHTML = peers.map(p => {
+      const isMe    = p.id === myId;
+      const cached  = this._peers[p.id] || {};
+      const prof    = isMe ? this._getProfile() : (cached.profile || p.profile || {});
+      const name    = isMe ? (prof.name || this.myName) : (prof.name || cached.name || p.name || 'Director');
+      const emoji   = prof.avatarEmoji || '🎮';
+      const role    = p.role || (isMe ? (this.isHost ? 'Host' : 'Co-Director') : 'Co-Director');
+      return '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 12px;background:rgba(255,255,255,.04);border:1px solid rgba(139,92,246,.2);border-radius:10px;min-width:80px;">' +
+        '<div style="font-size:28px;">' + emoji + '</div>' +
+        '<div style="font-size:11px;font-weight:700;color:#e9d5ff;text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</div>' +
+        '<div style="font-size:9.5px;color:' + (role==='Host'?'#c084fc':'#4ade80') + ';font-weight:600;letter-spacing:.5px;">' + role + '</div>' +
+        (isMe ? '<div style="font-size:8px;color:rgba(255,255,255,.3);">vos</div>' : '') +
+        '</div>';
+    }).join('');
   },
 
-  /* ── Obtener perfil activo ──
-     FUENTE DE VERDAD: _dpProfile (variable global siempre actualizada).
-     _dpProfile se carga en dpLoad() al hacer login y se actualiza en
-     dpSaveProfile(). El sistema PSO es secundario; si tiene datos los mezcla.  */
+  /* ── perfil ── */
   _getProfile() {
     try {
-      // 1) Base real: variable global _dpProfile (panel de perfil del usuario)
       const dp = (typeof _dpProfile !== 'undefined') ? _dpProfile : {};
-
-      // 2) Intentar PSO como complemento (opcional)
       let pso = {};
       try {
-        const profKey   = window._DG_PSO_PROFILES_KEY || 'dg_profiles_list';
-        const activeKey = window._DG_PSO_ACTIVE_KEY   || 'dg_active_profile';
-        const list = JSON.parse(localStorage.getItem(profKey) || '[]');
-        const idx  = parseInt(localStorage.getItem(activeKey) || '0');
+        const list = JSON.parse(localStorage.getItem(window._DG_PSO_PROFILES_KEY || 'dg_profiles_list') || '[]');
+        const idx  = parseInt(localStorage.getItem(window._DG_PSO_ACTIVE_KEY    || 'dg_active_profile') || '0');
         pso = list[idx] || {};
       } catch(e) {}
-
-      // 3) _dpProfile tiene prioridad sobre PSO
-      const merged = Object.assign({}, pso, dp);
-
-      return {
-        name:         merged.name         || this.myName || 'Director',
-        title:        merged.title        || '',
-        avatarType:   merged.avatarType   || 'emoji',
-        avatarEmoji:  merged.avatarEmoji  || '🎮',
-        avatarId:     merged.avatarId     || null,
-        photoDataUrl: merged.photoDataUrl || null,
-        cardTheme:    merged.cardTheme    || 1,
-      };
-    } catch(e) {
-      return { name: this.myName || 'Director', avatarType: 'emoji', avatarEmoji: '🎮', cardTheme: 1 };
-    }
+      const m = Object.assign({}, pso, dp);
+      return { name: m.name || this.myName || 'Director', title: m.title || '', avatarType: m.avatarType || 'emoji', avatarEmoji: m.avatarEmoji || '🎮', avatarId: m.avatarId || null, photoDataUrl: m.photoDataUrl || null, cardTheme: m.cardTheme || 1 };
+    } catch(e) { return { name: this.myName || 'Director', avatarType: 'emoji', avatarEmoji: '🎮', cardTheme: 1 }; }
   },
 
-  /* ── Helpers UI ── */
+  /* ── helpers UI ── */
   _setStatus(type, msg) {
     const dot  = document.getElementById('cd-status-dot');
     const text = document.getElementById('cd-status-text');
-    if (dot)  dot.className = 'cd-status-dot' + (type ? ' ' + type : '');
+    if (dot)  dot.className  = 'cd-status-dot' + (type ? ' ' + type : '');
     if (text) text.textContent = msg;
   },
   _setStatus2(type, msg) {
     const dot  = document.getElementById('cd-status-dot2');
     const text = document.getElementById('cd-status-text2');
-    if (dot)  dot.className = 'cd-status-dot' + (type ? ' ' + type : '');
+    if (dot)  dot.className  = 'cd-status-dot' + (type ? ' ' + type : '');
     if (text) text.textContent = msg;
   },
   _log(msg) {
     const log = document.getElementById('cd-log');
     if (!log) return;
-    const line = document.createElement('div');
-    line.textContent = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + ' · ' + msg;
-    log.prepend(line);
+    const d = document.createElement('div');
+    d.textContent = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + ' · ' + msg;
+    log.prepend(d);
   },
   _updateTopBtn(live) {
     const btn = document.getElementById('cd-topbar-btn');
     if (!btn) return;
     btn.className = 'cd-topbar-btn' + (live ? ' live' : '');
-    const pulse = btn.querySelector('.cd-pulse');
-    if (pulse) pulse.style.background = live ? '#4ade80' : '#a855f7';
+    const p = btn.querySelector('.cd-pulse');
+    if (p) p.style.background = live ? '#4ade80' : '#a855f7';
   },
   copyCode() {
     navigator.clipboard.writeText(this.sessionCode || '').catch(() => {});
@@ -22893,87 +21990,21 @@ const CD = {
     const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     return Array.from({length:6}, () => c[Math.floor(Math.random()*c.length)]).join('');
   },
-
-  /* ── Guardar/leer URL del servidor ── */
-  _onServerUrlChange(val) {
-    const v = val.trim();
-    window._DG_SERVER_URL = v || undefined;
-    try { if (v) localStorage.setItem('dg_server_url', v); else localStorage.removeItem('dg_server_url'); } catch(e) {}
-    const st = document.getElementById('cd-srv-test-status');
-    if (st) st.textContent = '';
-  },
-  _loadServerUrl() {
-    try {
-      const saved = localStorage.getItem('dg_server_url') || '';
-      if (saved) {
-        window._DG_SERVER_URL = saved;
-        const el = document.getElementById('cd-server-url');
-        if (el) el.value = saved;
-      }
-    } catch(e) {}
-  },
 };
 
-/* ── Enviar cursor ── */
+/* cursor sync */
 document.addEventListener('mousemove', e => {
   if (!CD.connected || !CD.socket) return;
   CD.socket.emit('cursor-move', { name: CD.myName, x: e.clientX, y: e.clientY });
 });
 
-/* ── cd_load para recibir proyecto del host ── */
-loadFromKey.__cd_load = _applyProjectData;
+/* cd_load */
+if (typeof loadFromKey !== 'undefined') loadFromKey.__cd_load = _applyProjectData;
 
-/* ── Init ── */
 document.addEventListener('DOMContentLoaded', () => {
-  addLog('info', '🎬 Co-Director listo · Hacé clic en "Co-Director" para colaborar en tiempo real.');
+  addLog('info', '🎬 Co-Director listo · Clic en "Co-Director" para colaborar.');
 });
 </script>
-
-<!-- SERVIDOR: exponer eventos necesarios en server.js
-
-  // ── IMPORTANTE: configurar buffer grande para soportar texturas base64 ──
-  // const io = new Server(server, {
-  //   maxHttpBufferSize: 50e6,  // 50 MB — necesario para sync de texturas/spritesheets
-  //   cors: { origin: '*' }
-  // });
-
-  // ── Perfiles de peers (CRÍTICO para mostrar nombres e imágenes) ──
-  socket.on('peer-profile', ({ sessionCode, profile, name, targetId }) => {
-    if (targetId) socket.to(targetId).emit('peer-profile', { fromId: socket.id, profile, name });
-    else          socket.to(sessionCode).emit('peer-profile', { fromId: socket.id, profile, name });
-  });
-  // El guest pide perfiles al host cuando peer-profile no llegó
-  socket.on('request-profiles', ({ sessionCode, fromId }) => {
-    socket.to(sessionCode).emit('request-profiles', { fromId: socket.id });
-  });
-  // ── project-update BIDIRECCIONAL ──
-  // Los updates incrementales NO tienen assets (ligeros).
-  // Los full sync (carga de texturas) SÍ tienen assets (hasta 50MB).
-  socket.on('project-update', (data) => {
-    const code = data._sessionCode;
-    if (code) socket.to(code).emit('project-update', { ...data, _fromSocketId: socket.id });
-  });
-  // ── Protocolo de texturas (CRÍTICO — agregar estos dos handlers) ──
-  // El cliente que tiene la textura responde al que la pide, en chunks de 200KB.
-  // targetId: si existe, enviar solo a ese socket; si no, broadcast a la sala.
-  socket.on('texture-request', (data) => {
-    const { sessionCode, targetId, fromId } = data;
-    // Reenviar la solicitud a quien tiene la textura (el que hizo el update)
-    if (targetId) socket.to(targetId).emit('texture-request', { ...data, fromId: socket.id });
-    else if (sessionCode) socket.to(sessionCode).emit('texture-request', { ...data, fromId: socket.id });
-  });
-  socket.on('texture-chunk', (data) => {
-    const { sessionCode, targetId } = data;
-    // Reenviar chunk al receptor que lo pidió
-    if (targetId) socket.to(targetId).emit('texture-chunk', data);
-    else if (sessionCode) socket.to(sessionCode).emit('texture-chunk', data);
-  });
-  socket.on('srv-save',  ({ reqId, userId, data })  => { /* guardar proyecto */ socket.emit('srv-response', { reqId, ok:true, data:{id} }); });
-  socket.on('srv-list',  ({ reqId, userId })         => { /* listar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:[...] }); });
-  socket.on('srv-load',  ({ reqId, userId, id })     => { /* cargar proyecto */  socket.emit('srv-response', { reqId, ok:true, data:{...} }); });
-  socket.on('srv-clear', ({ reqId, userId })         => { /* borrar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:null }); });
--->
-
 
 </body>
 </html>
