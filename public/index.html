@@ -21688,6 +21688,8 @@ const CD = {
   _syncPatched:  false,
   _syncTimer:    null,
   _mutObs:       null,
+  _canvasReady:  false,     // guest: true cuando ya recibió el canvas inicial del host
+  _broadcastingTimer: null, // timer handle para limpiar _broadcasting
 
   /* ════════════ ABRIR / CERRAR ════════════ */
   open() {
@@ -21873,9 +21875,9 @@ case 'firebase-updated': {
         if (!data.projectId || !window._SRV || typeof window._SRV.loadProject !== 'function') break;
         window._SRV.loadProject(data.projectId).then(fbData => {
           if (!fbData) return;
-          this._broadcasting = true;
+          this._setBroadcasting(500);
           try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
-          setTimeout(() => { this._broadcasting = false; }, 500);
+          if (!this.isHost) this._canvasReady = true;
           this._log('☁️ Canvas actualizado desde Firebase');
         }).catch(() => {});
         break;
@@ -21888,9 +21890,9 @@ case 'firebase-updated': {
         toast('☁️ Cargando texturas desde Firebase…');
         window._SRV.loadProject(data.projectId).then(fbData => {
           if (!fbData) { this._log('⚠ Firebase: proyecto no encontrado'); return; }
-          this._broadcasting = true;
+          this._setBroadcasting(500);
           try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
-          setTimeout(() => { this._broadcasting = false; }, 500);
+          if (!this.isHost) this._canvasReady = true;
           this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
           toast('✅ Canvas y texturas cargados');
         }).catch(err => {
@@ -21918,9 +21920,9 @@ case 'firebase-updated': {
 
       case 'snapshot':
         // Guest recibe snapshot inicial del canvas (con texturas embebidas)
-        this._broadcasting = true;
+        this._setBroadcasting(500);
         try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
-        setTimeout(() => { this._broadcasting = false; }, 500);
+        this._canvasReady = true;
         this._log('📂 Canvas recibido del host');
         toast('📂 Canvas cargado desde el host');
         // Retry: pedir texturas que no llegaron tras 4 segundos
@@ -21947,13 +21949,14 @@ case 'firebase-updated': {
       case 'canvas-update':
         // Alguien (host o guest via relay) envió un update
         if (data.fromId === this.myPeerId) break; // es mío, ignorar
-        this._broadcasting = true;
+        this._setBroadcasting(200);
         try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
-        // Delay para que el MutationObserver no dispare un update de vuelta
-        setTimeout(() => { this._broadcasting = false; }, 200);
+        this._log('📥 Canvas recibido de ' + (this._peers[data.fromId]?.name || data.fromId));
         // Si soy host, relay a todos los demás guests (excepto quien lo envió)
         if (this.isHost) {
           this._broadcastExcept(fromId, data);
+          const others = Object.keys(this._conns).filter(id => id !== fromId).length;
+          if (others > 0) this._log('🔁 Relay a ' + others + ' co-director(es)');
         }
         break;
 
@@ -22123,6 +22126,13 @@ case 'firebase-updated': {
   },
 
   /* ════════════ PEERJS INIT ════════════ */
+  /* ════════════ HELPER: setear _broadcasting con timer único ════════════ */
+  _setBroadcasting(ms) {
+    this._broadcasting = true;
+    clearTimeout(this._broadcastingTimer);
+    this._broadcastingTimer = setTimeout(() => { this._broadcasting = false; }, ms);
+  },
+
   _initPeer(cb) {
     if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
 
@@ -22306,15 +22316,21 @@ case 'firebase-updated': {
 
   _sendCanvasUpdate() {
     if (!this.connected || this._broadcasting) return;
+    // Guest: no enviar hasta recibir el canvas inicial del host (evita sobreescribir con STATE vacío)
+    if (!this.isHost && !this._canvasReady) return;
     try {
       const payload = _buildSaveData();
       const msg = { _type: 'canvas-update', fromId: this.myPeerId, payload };
       if (this.isHost) {
         this._broadcastAll(msg);
+        this._log('📤 Canvas enviado a ' + Object.keys(this._conns).length + ' co-director(es)');
       } else if (this._hostConn && this._hostConn.open) {
         this._hostConn.send(msg);
+        this._log('📤 Canvas enviado al host');
+      } else {
+        this._log('⚠ No se pudo enviar: sin conexión activa');
       }
-    } catch(e) { /* silencioso */ }
+    } catch(e) { this._log('❌ Error enviando canvas: ' + e.message); }
   },
 
   scheduleUpdate() {
@@ -22421,6 +22437,9 @@ case 'firebase-updated': {
     this._hostConn   = null;
     this._peers      = {};
     this._syncPatched = false;
+    this._canvasReady = false;
+    clearTimeout(this._broadcastingTimer);
+    this._broadcasting = false;
     this._clearCursors();
     this._updateTopBtn(false);
     document.getElementById('cd-pane-setup').style.display     = 'block';
