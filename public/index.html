@@ -15875,7 +15875,7 @@ function refreshSavesList() {
       const lsSize = document.getElementById('sb-ls-size');
       if (lsSize) lsSize.textContent = projects.length + ' proyecto(s)';
     }).catch(() => {
-      savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">⚠️ Sin conexión al servidor.</div>';
+      savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">⚠️ Error Firebase: ' + (err.code||err.message||'desconocido') + '</div>';
     });
   } else {
     savesEl.innerHTML = '<div style="font-size:11.5px;color:var(--text3);">Sin conexión al servidor.</div>';
@@ -16210,7 +16210,7 @@ function openWelcome() {
         </div>`;
       }).join('');
     }).catch(() => {
-      if (recent) recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">⚠️ No se pudo conectar al servidor.</div>';
+      if (recent) recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">⚠️ Error Firebase: ' + (err.code||err.message||'desconocido') + '</div>';
     });
   } else {
     if (recent) recent.innerHTML = '<div style="font-size:11.5px;color:var(--text3);padding:10px 0;">Sin conexión al servidor aún.</div>';
@@ -21492,8 +21492,8 @@ function _applyProfileNamespace(uid) {
       try {
         const q=query(collection(_db,'dg_projects'),orderBy('_savedAt','desc'),limit(50));
         const snap=await getDocs(q);
-        return snap.docs.map(d=>({id:d.id,name:d.data().projectName||d.id,savedAt:d.data()._savedAt||''}));
-      } catch(e){return[];}
+        return snap.docs.map(d=>({id:d.id,name:d.data().projectName||d.data().name||d.id,projectName:d.data().projectName||d.data().name||d.id,savedAt:d.data()._savedAt||''}));
+      } catch(e){console.error('[DG Firebase] Error listProjects:',e.code||e.message,e);throw e;}
     },
     async clearProjects() {
       if(!_db) return;
