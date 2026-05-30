@@ -9072,15 +9072,6 @@ function _restoreAssets(data, _preserveUrls) {
       if (n > maxId) maxId = n;
     });
     if (maxId >= assetIdCounter) assetIdCounter = maxId + 1;
-    // Sincronizar IDB con el estado actual (borrar obsoletos, guardar actuales)
-    // Solo en carga completa de proyecto (no en updates incrementales Co-Director)
-    if (!_preserveUrls && _assetDB) {
-      try {
-        const _tx = _assetDB.transaction(IDB_STORE, 'readwrite');
-        _tx.objectStore(IDB_STORE).clear();
-        ASSETS.forEach(a => { const s = { ...a }; delete s.audioEl; _tx.objectStore(IDB_STORE).put(s); });
-      } catch(e) {}
-    }
     renderAssetGrid();
   }
 }
@@ -11252,10 +11243,8 @@ function placeAssetOnCanvas(a, wx, wy) {
 
 /* ─── Add asset to library ─── */
 function addAssetToLib(asset) {
-  // Upsert: si ya existe el id, actualizar en lugar de duplicar
-  const _aidx = ASSETS.findIndex(a => a.id === asset.id);
-  if (_aidx > -1) { ASSETS[_aidx] = asset; }
-  else { ASSETS.push(asset); }
+  if (ASSETS.some(a => a.id === asset.id)) return;   // evitar duplicados
+  ASSETS.push(asset);
   renderAssetGrid(document.getElementById('am-search')?.value?.toLowerCase() || '');
   // also refresh bottom assets pane
   refreshBottomAssets();
@@ -11337,19 +11326,15 @@ function setIdbStatus(ok) {
     await openAssetDB();
     const saved = await idbLoadAllAssets();
     if (saved.length) {
-      // Merge: solo agregar los que no existen aún (dedup por id)
-      let added = 0;
-      saved.forEach(a => {
-        if (!ASSETS.some(x => x.id === a.id)) {
-          ASSETS.push(a);
-          added++;
-        }
-        assetIdCounter = Math.max(assetIdCounter, parseInt((a.id||'').replace('asset','')) + 1 || 1);
-      });
-      if (added > 0) {
+      // Restore only if ASSETS is empty (fresh load, not from project save)
+      if (ASSETS.length === 0) {
+        saved.forEach(a => {
+          if (!ASSETS.some(x => x.id === a.id)) ASSETS.push(a);
+          assetIdCounter = Math.max(assetIdCounter, parseInt((a.id||'').replace('asset','')) + 1 || 1);
+        });
         renderAssetGrid();
         refreshBottomAssets();
-        addLog('info', `${added} assets restaurados desde IndexedDB.`);
+        addLog('info', `${saved.length} assets restaurados desde IndexedDB.`);
       }
     }
     setIdbStatus(true);
@@ -11365,36 +11350,24 @@ window.addAssetToLib = function(asset) {
   _origAddAssetToLib(asset);
   idbSaveAsset(asset);
   renderTagFilterRow();
-  // Si estamos en Co-Director como host, guardar en Firebase para que
-  // todos los guests reciban las texturas completas via firebase-updated
-  if (typeof CD !== 'undefined' && CD.connected && CD.isHost) {
-    // Debounce: esperar 800ms para acumular múltiples assets (ej: spritesheet)
-    clearTimeout(window._cdAssetSaveTimer);
-    window._cdAssetSaveTimer = setTimeout(() => {
-      if (window._SRV && typeof window._SRV.saveProject === 'function') {
-        const _fullData = _buildSaveDataFull();
-        const _sp = window._SRV.saveProject(_fullData, true);
-        const _afterSave = (result) => {
-          if (result && (result.id || result.projectId)) {
+  if (typeof CD !== 'undefined' && CD.connected) {
+    if (CD.isHost && window._SRV && typeof window._SRV.saveProject === 'function') {
+      // Host: guardar en Firebase con debounce 800ms y notificar guests via firebase-updated
+      clearTimeout(window._cdAssetSaveTimer);
+      window._cdAssetSaveTimer = setTimeout(() => {
+        const _fd = _buildSaveDataFull();
+        window._SRV.saveProject(_fd, true).then(result => {
+          if (result && (result.id || result.projectId))
             window._CD_currentProjectId = result.id || result.projectId;
-          }
-          if (!window._CD_currentProjectId) window._CD_currentProjectId = _fullData.projectName;
-          // Notificar a todos los guests que recarguen desde Firebase
-          if (CD.connected && window._CD_currentProjectId) {
-            CD._broadcastAll({ _type: 'firebase-updated', fromId: CD.myPeerId, projectId: window._CD_currentProjectId });
-            CD._log('☁️ Asset guardado en Firebase — guests notificados');
-          }
-        };
-        if (_sp && typeof _sp.then === 'function') { _sp.then(_afterSave).catch(() => { CD._announceUpdate(); }); }
-        else { setTimeout(() => _afterSave(null), 500); }
-      } else {
-        // Sin Firebase: enviar texturas por PeerJS
-        CD._announceUpdate();
-      }
-    }, 800);
-  } else if (typeof CD !== 'undefined' && CD.connected) {
-    // Soy guest: solo anunciar update al host
-    CD._announceUpdate();
+          if (!window._CD_currentProjectId) window._CD_currentProjectId = _fd.projectName;
+          CD._broadcastAll({ _type: 'firebase-updated', fromId: CD.myPeerId, projectId: window._CD_currentProjectId });
+          CD._log('☁️ Asset guardado en Firebase — guests notificados');
+        }).catch(() => CD._announceUpdate());
+      }, 800);
+    } else {
+      // Guest o sin Firebase: anunciar update normal
+      CD._announceUpdate();
+    }
   }
 };
 
@@ -17706,9 +17679,6 @@ const SceneManager = {
     if (!sc) return;
     STATE.objects = sc.objects.map(o => JSON.parse(JSON.stringify(o)));
     STATE.actors  = sc.actors.map(a => JSON.parse(JSON.stringify(a)));
-    // Limpiar canvas antes de re-renderizar para evitar elementos DOM duplicados
-    const _wcrs = document.getElementById('world-canvas');
-    if (_wcrs) _wcrs.innerHTML = '';
     if (typeof renderWorldObj   === 'function') { STATE.objects.forEach(o => renderWorldObj(o)); }
     if (typeof renderActorLib   === 'function') renderActorLib();
     if (typeof renderSceneTree  === 'function') renderSceneTree();
@@ -21949,7 +21919,7 @@ case 'firebase-updated': {
           try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
           if (!this.isHost) this._canvasReady = true;
           this._log('☁️ Canvas actualizado desde Firebase');
-          // Pedir al host las texturas que aún falten (assets muy nuevos no guardados aún)
+          // Pedir al host las texturas que aún fallen tras cargar Firebase
           if (!this.isHost && this._hostConn && this._hostConn.open) {
             setTimeout(() => {
               (typeof ASSETS !== 'undefined' ? ASSETS : []).forEach(a => {
