@@ -7800,10 +7800,8 @@ async function handleSpriteImport(id, input) {
   toast(`🖼 Spritesheet cargado`);
   updateRightPanel();
   input.value = '';
-  // Disparar full sync con imagen para que el co-director la reciba
-  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
-    setTimeout(() => CD._sendProjectToRoom(), 120);
-  }
+  // Anunciar que hay textura nueva — el receptor la pedirá via texture-request
+  if (typeof CD !== 'undefined' && CD.connected) CD._announceUpdate();
 }
 
 function updateSpriteCfg(id, key, val) {
@@ -8356,10 +8354,8 @@ async function handleFrameFiles(id, idx, input) {
   toast(`🖼 ${loaded} frame${loaded>1?'s':''} cargado${loaded>1?'s':''}`);
   addLog('info', `${loaded} frames cargados en animación "${anim.name}".`);
   input.value = '';
-  // Full sync para que el co-director reciba los frames
-  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
-    setTimeout(() => CD._sendProjectToRoom(), 150);
-  }
+  // Anunciar que hay frames nuevos
+  if (typeof CD !== 'undefined' && CD.connected) CD._announceUpdate();
 }
 
 function handleFrameDrop(e, id, idx) {
@@ -8462,10 +8458,8 @@ async function handleGifFile(id, idx, input) {
   toast(`🎞 GIF "${file.name}" cargado`);
   addLog('info', `GIF "${file.name}" asignado a animación "${o.animations[idx].name}".`);
   input.value = '';
-  // Full sync para que el co-director reciba el GIF
-  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
-    setTimeout(() => CD._sendProjectToRoom(), 150);
-  }
+  // Anunciar que hay GIF nuevo
+  if (typeof CD !== 'undefined' && CD.connected) CD._announceUpdate();
 }
 
 function handleGifDrop(e, id, idx) {
@@ -11339,10 +11333,8 @@ window.addAssetToLib = function(asset) {
   _origAddAssetToLib(asset);
   idbSaveAsset(asset);
   renderTagFilterRow();
-  // Full sync con el co-director para que reciba el nuevo asset con su imagen
-  if (typeof CD !== 'undefined' && CD.connected && CD.socket) {
-    setTimeout(() => CD._sendProjectToRoom(), 200);
-  }
+  // Anunciar asset nuevo — el receptor lo pedirá
+  if (typeof CD !== 'undefined' && CD.connected) CD._announceUpdate();
 };
 
 /* ── Patch deleteAsset to also remove from IDB ── */
@@ -15975,7 +15967,76 @@ function stopAutosave() {
 }
 
 function _buildSaveData() {
-  // Enriquecer objetos con imgUrl desde su asset (para tiles que solo tienen assetId)
+  /* REGLA DE ORO: _buildSaveData NUNCA incluye base64 en objetos ni assets.
+     Las texturas/frames base64 viajan SOLO por el protocolo texture-request/chunk.
+     Esto evita que cualquier emit() supere el buffer de socket.io (1MB default)
+     y corte la conexión. */
+
+  const B64 = 300; // threshold: strings más largas que esto son base64
+
+  // Objetos: conservar assetId pero strip de imgUrl/spriteSheet.url/frames base64
+  // Marcar con _needsTexture / _framesCount para que el receptor sepa qué pedir
+  const safeObjects = (STATE.objects || []).map(o => {
+    const obj = { ...o };
+    if (obj.imgUrl && obj.imgUrl.length > B64) {
+      obj._needsTexture = true;
+      delete obj.imgUrl;
+    }
+    if (obj.spriteSheet?.url && obj.spriteSheet.url.length > B64) {
+      obj._needsTexture = true;
+      obj.spriteSheet = { ...obj.spriteSheet, url: undefined };
+    }
+    if (obj.animations) {
+      obj.animations = obj.animations.map(a => {
+        const stripped = { ...a };
+        if (a.frames && a.frames.length > 0 && a.frames.some(f => f && f.length > B64)) {
+          stripped._framesCount = a.frames.length; // cuántos frames tiene
+          stripped.frames = [];
+        }
+        if (a.gifUrl && a.gifUrl.length > B64) {
+          stripped._hasGif = true;
+          delete stripped.gifUrl;
+        }
+        return stripped;
+      });
+    }
+    if (obj.gifUrl && obj.gifUrl.length > B64) {
+      obj._needsTexture = true;
+      delete obj.gifUrl;
+    }
+    return obj;
+  });
+
+  // Assets: incluir solo metadatos, no la url base64
+  const safeAssets = (typeof ASSETS !== 'undefined' ? ASSETS : []).map(a => {
+    const c = { ...a };
+    delete c.audioEl;
+    // Guardar hash/tamaño para que el receptor sepa si tiene la versión actualizada
+    if (c.url && c.url.length > B64) {
+      c._hasTexture = true;   // señal: este asset tiene textura, pedila via texture-request
+      c._texLen = c.url.length; // tamaño aproximado para priorizar
+      delete c.url;           // no viajar por socket
+    }
+    return c;
+  });
+
+  return {
+    projectName: document.getElementById('proj-name-badge')?.textContent || 'Sin título',
+    objects:     safeObjects,
+    layers:      STATE.layers,
+    activeLayer: STATE.activeLayer,
+    actors:      STATE.actors,
+    rules:       typeof RULES !== 'undefined' ? RULES : [],
+    relations:   typeof RELATIONS !== 'undefined' ? RELATIONS : [],
+    assets:      safeAssets,
+    worldW:      parseInt(document.getElementById('world-canvas')?.style.width)  || 1280,
+    worldH:      parseInt(document.getElementById('world-canvas')?.style.height) || 960,
+    savedAt:     new Date().toISOString(),
+  };
+}
+
+/* ── _buildSaveDataFull: versión completa con base64, SOLO para guardar en servidor ── */
+function _buildSaveDataFull() {
   const enrichedObjects = (STATE.objects || []).map(o => {
     if (!o.imgUrl && o.assetId && typeof ASSETS !== 'undefined') {
       const asset = ASSETS.find(a => a.id === o.assetId);
@@ -15999,7 +16060,7 @@ function _buildSaveData() {
 }
 
 function _doSave(silent=false) {
-  const data = _buildSaveData();
+  const data = _buildSaveDataFull(); // incluye base64 para persistencia en servidor
 
   // ── Guardar via servidor (Socket.io) ──
   if (window._SRV && typeof window._SRV.saveProject === 'function') {
@@ -16178,13 +16239,54 @@ function _applyProjectData(data, _fromCD) {
     if (typeof renderSceneTree === 'function') renderSceneTree();
     if (typeof renderLayers    === 'function') renderLayers();
     if (typeof updateStatusBar === 'function') updateStatusBar();
-    // Aplicar texturas DESPUÉS de todos los renders para evitar que re-renders borren las imágenes
-    // Usar STATE.objects (ya mergeado con texturas locales) en vez de data.objects
+    // Aplicar texturas locales que ya tenemos
     requestAnimationFrame(() => {
       for (const o of STATE.objects) {
         if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
       }
     });
+
+    // Si llegamos de Co-Director, pedir via texture-request los assets que faltan
+    // (aquellos marcados con _hasTexture:true pero sin url local)
+    if (_fromCD && window.CD && window.CD.socket && window.CD.connected) {
+      // Pedir assets con textura faltante
+      (data.assets || []).forEach(a => {
+        if (!a._hasTexture) return;
+        const localAsset = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(x => x.id === a.id);
+        if (localAsset && localAsset.url && localAsset.url.length > 300) return; // ya la tenemos
+        // Pedir la textura al emisor del update
+        window.CD.socket.emit('texture-request', {
+          assetId: a.id,
+          sessionCode: window.CD.sessionCode,
+          fromId: window.CD.socket.id,
+        });
+      });
+
+      // Pedir texturas de objetos que necesiten imgUrl/spriteSheet/frames
+      STATE.objects.forEach(o => {
+        if (o._needsTexture) {
+          window.CD.socket.emit('texture-request', {
+            objId: o.id,
+            sessionCode: window.CD.sessionCode,
+            fromId: window.CD.socket.id,
+          });
+        }
+        // Verificar frames de animaciones vacíos
+        if (o.animations) {
+          o.animations.forEach((anim, animIdx) => {
+            if (anim._framesCount && (!anim.frames || anim.frames.length === 0)) {
+              for (let fi = 0; fi < anim._framesCount; fi++) {
+                window.CD.socket.emit('texture-request', {
+                  objId: o.id, animIdx, frameIdx: fi,
+                  sessionCode: window.CD.sessionCode,
+                  fromId: window.CD.socket.id,
+                });
+              }
+            }
+          });
+        }
+      });
+    }
     // No limpiar historial cuando viene de Co-Director (evita side-effects en _updateUI)
     if (!_fromCD && typeof CommandHistory !== 'undefined') CommandHistory.clear();
   } catch(e) { console.error('_applyProjectData error:', e); }
@@ -19674,20 +19776,8 @@ function imDoImport() {
       o.spriteSheet.frameW=tw; o.spriteSheet.frameH=th;
       updateRightPanel();
       toast('✅ Imagen importada ('+tw+'×'+th+')');
-      // Forzar full sync para que el co-director reciba la textura
-      if (window.CD && window.CD.connected && typeof _buildSaveData === 'function') {
-        setTimeout(() => {
-          try {
-            const payload = _buildSaveData();
-            payload._fromSocketId = window.CD.socket?.id;
-            payload._sessionCode  = window.CD.sessionCode;
-            payload._isFullSync   = true;
-            window.CD._lastSyncedAssetIds = new Set((payload.assets||[]).map(a=>a.id));
-            window.CD.socket.emit('project-update', payload);
-            window.CD._log('📦 Textura importada — sync completo enviado');
-          } catch(e) { console.warn('CD texture sync error:', e); }
-        }, 200);
-      }
+      // Anunciar textura nueva — el receptor la pedirá via texture-request
+      if (window.CD && window.CD.connected) window.CD._announceUpdate();
     } else {
       toast('⚠ Seleccioná un objeto primero');
     }
@@ -19717,20 +19807,8 @@ function imDoImport() {
     updateRightPanel();
     toast('✅ Spritesheet: '+(cols*rows)+' frames → "'+anim.name+'"');
     imClose();
-    // Forzar full sync — los frames base64 son voluminosos y deben llegar enteros
-    if (window.CD && window.CD.connected && typeof _buildSaveData === 'function') {
-      setTimeout(() => {
-        try {
-          const payload = _buildSaveData();
-          payload._fromSocketId = window.CD.socket?.id;
-          payload._sessionCode  = window.CD.sessionCode;
-          payload._isFullSync   = true;
-          window.CD._lastSyncedAssetIds = new Set((payload.assets||[]).map(a=>a.id));
-          window.CD.socket.emit('project-update', payload);
-          window.CD._log('📦 Spritesheet importado — sync completo enviado ('+(cols*rows)+' frames)');
-        } catch(e) { console.warn('CD texture sync error:', e); }
-      }, 200);
-    }
+    // Anunciar frames nuevos — el receptor los pedirá via texture-request
+    if (window.CD && window.CD.connected) window.CD._announceUpdate();
   }
 }
 
@@ -22052,6 +22130,103 @@ const CD = {
     // Cursores remotos
     this.socket.on('cursor-move', ({ id, name, x, y }) => this._updateCursor(id, name, x, y));
 
+    // ── Protocolo de texturas: request / chunk ──
+    // El receptor pide texturas por id; el emisor las envía en chunks de 200KB.
+    // Esto evita COMPLETAMENTE que base64 viaje en project-update y corte la conexión.
+
+    this.socket.on('texture-request', ({ assetId, objId, animIdx, frameIdx, fromId }) => {
+      // Solo responder si tenemos el asset
+      const asset = (typeof ASSETS !== 'undefined' ? ASSETS : []).find(a => a.id === assetId);
+      let url = asset ? asset.url : null;
+
+      // Si no hay asset directo, buscar en objetos (spriteSheet, frames, gifUrl)
+      if (!url && objId) {
+        const o = STATE.objects.find(x => x.id === objId);
+        if (o) {
+          if (animIdx !== undefined && o.animations && o.animations[animIdx]) {
+            const anim = o.animations[animIdx];
+            if (frameIdx !== undefined && anim.frames && anim.frames[frameIdx]) {
+              url = anim.frames[frameIdx];
+            } else if (anim.gifUrl) {
+              url = anim.gifUrl;
+            }
+          } else if (o.spriteSheet && o.spriteSheet.url) {
+            url = o.spriteSheet.url;
+          } else if (o.imgUrl) {
+            url = o.imgUrl;
+          }
+        }
+      }
+
+      if (!url || !this.socket) return;
+
+      // Enviar en chunks de 200KB
+      const CHUNK = 200 * 1024; // 200KB en chars base64
+      const total = Math.ceil(url.length / CHUNK);
+      for (let i = 0; i < total; i++) {
+        const chunk = url.slice(i * CHUNK, (i + 1) * CHUNK);
+        this.socket.emit('texture-chunk', {
+          assetId, objId, animIdx, frameIdx,
+          chunk, chunkIdx: i, totalChunks: total,
+          sessionCode: this.sessionCode,
+          targetId: fromId,
+        });
+      }
+    });
+
+    this.socket.on('texture-chunk', ({ assetId, objId, animIdx, frameIdx, chunk, chunkIdx, totalChunks }) => {
+      // Acumular chunks
+      if (!this._texChunks) this._texChunks = {};
+      const key = [assetId, objId, animIdx, frameIdx].filter(x => x !== undefined).join(':');
+      if (!this._texChunks[key]) this._texChunks[key] = { parts: [], total: totalChunks };
+      this._texChunks[key].parts[chunkIdx] = chunk;
+
+      const acc = this._texChunks[key];
+      const received = acc.parts.filter(Boolean).length;
+      if (received < acc.total) return; // aún esperando chunks
+
+      // Todos los chunks llegaron → reconstruir URL
+      const url = acc.parts.join('');
+      delete this._texChunks[key];
+
+      // Aplicar al estado local
+      if (assetId && typeof ASSETS !== 'undefined') {
+        const asset = ASSETS.find(a => a.id === assetId);
+        if (asset) {
+          asset.url = url;
+          asset._hasTexture = true;
+          // Actualizar elementos en canvas que usen este asset
+          STATE.objects.forEach(o => {
+            if (o.assetId === assetId && typeof _applyObjImgUrl === 'function') {
+              o.imgUrl = url;
+              _applyObjImgUrl(o);
+            }
+          });
+        }
+      }
+      if (objId) {
+        const o = STATE.objects.find(x => x.id === objId);
+        if (o) {
+          if (animIdx !== undefined && o.animations && o.animations[animIdx]) {
+            const anim = o.animations[animIdx];
+            if (frameIdx !== undefined) {
+              if (!anim.frames) anim.frames = [];
+              anim.frames[frameIdx] = url;
+            } else {
+              anim.gifUrl = url;
+            }
+          } else if (!o.imgUrl || o.imgUrl.length < 300) {
+            o.imgUrl = url;
+            if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
+          } else if (o.spriteSheet) {
+            o.spriteSheet.url = url;
+            if (typeof _applyObjImgUrl === 'function') _applyObjImgUrl(o);
+          }
+        }
+      }
+      if (typeof renderAssetGrid === 'function') renderAssetGrid();
+    });
+
     this.socket.on('disconnect', () => {
       this._log('🔌 Desconectado del servidor');
       if (this.connected) this._onDisconnect();
@@ -22120,77 +22295,39 @@ const CD = {
     this._patchCommandHistory();
   },
 
-  /* ── Enviar proyecto completo a la sala (incluye assets con imágenes) ── */
+  /* ── Enviar proyecto a la sala ──
+     _buildSaveData() ya excluye todo base64 — el payload nunca supera ~50KB.
+     Las texturas viajan por separado via texture-request/chunk.            ── */
   _sendProjectToRoom() {
     if (!this.socket) return;
     const data = _buildSaveData();
     data._fromSocketId = this.socket.id;
     data._sessionCode  = this.sessionCode;
-    data._isFullSync   = true; // flag: payload completo con assets
-    // Registrar qué assets ya conoce el receptor para detectar nuevos en updates futuros
-    this._lastSyncedAssetIds = new Set((data.assets || []).map(a => a.id));
     this.socket.emit('project-update', data);
-    this._log(`📤 Canvas sincronizado con la sala`);
+    this._log('📤 Estado sincronizado (texturas se sincronizan bajo demanda)');
   },
 
-  /* ── Construir payload liviano para updates incrementales ── */
-  /* REGLA: los assets (base64) NO viajan en updates incrementales — ya fueron enviados
-     en el project-load inicial. Pero hay dos casos especiales:
-     1) Un peer importó una textura NUEVA localmente → el otro no la tiene → full sync.
-     2) Los objetos pueden tener imgUrl con base64 incrustado (enriquecido por _buildSaveData).
-        Esas URLs pueden pesar MBs cada una y CRASHEAN al receptor si el asset no está en su ASSETS[].
-        Solución: en el payload liviano, strip del imgUrl base64 largo y dejar solo assetId.
-        El receptor usa _applyObjImgUrl que resuelve desde su ASSETS[] local. */
+  /* ── Anunciar cambio de estado (sin texturas) ── */
+  /* Emite un project-update liviano para que el receptor sepa que el estado cambió
+     y pueda pedir las texturas que le faltan via texture-request.              */
+  _announceUpdate() {
+    if (!this.connected || !this.socket) return;
+    clearTimeout(this._announceTimer);
+    this._announceTimer = setTimeout(() => {
+      if (!this.connected || !this.socket) return;
+      const payload = _buildSaveData(); // sin base64
+      payload._fromSocketId = this.socket.id;
+      payload._sessionCode  = this.sessionCode;
+      this.socket.emit('project-update', payload);
+      this._log('📦 Textura disponible — receptor la pedirá');
+    }, 300);
+  },
+
+  /* ── Payload de update incremental ──
+     _buildSaveData() ya excluye todo base64.
+     Solo agregamos metadatos de routing.         ── */
   _buildLightPayload() {
     const data = _buildSaveData();
-
-    // Detectar si hay assets NUEVOS que el receptor no conoce.
-    // Comparar con el set de assetIds del último full sync conocido.
-    const currentAssetIds = new Set((data.assets || []).map(a => a.id));
-    const knownIds        = this._lastSyncedAssetIds || new Set();
-    const hasNewAssets    = [...currentAssetIds].some(id => !knownIds.has(id));
-
-    if (hasNewAssets) {
-      // Hay texturas nuevas → full sync (incluye assets completos)
-      data._fromSocketId = this.socket?.id;
-      data._sessionCode  = this.sessionCode;
-      data._isFullSync   = true;
-      this._lastSyncedAssetIds = currentAssetIds;
-      this._log('📦 Nueva textura detectada — sincronizando assets completos');
-      return data; // retornar CON assets
-    }
-
-    // Update incremental — quitar assets y limpiar imgUrl base64 de los objetos
-    // para evitar payloads de MBs y crashes en el receptor.
-    delete data.assets;
-
-    // Strip imgUrl si es base64 (data:image/...) — el receptor la resuelve
-    // desde su ASSETS[] local usando assetId. Si no tiene assetId, conservar
-    // la URL (puede ser una URL externa corta, no un base64).
-    const BASE64_THRESH = 512; // caracteres — cualquier cosa más larga es data URL
-    data.objects = (data.objects || []).map(o => {
-      let obj = { ...o };
-      // Strip imgUrl base64 largo
-      if (obj.imgUrl && obj.imgUrl.length > BASE64_THRESH) {
-        delete obj.imgUrl; // el receptor lo resuelve via assetId → ASSETS[]
-      }
-      // Strip spriteSheet.url base64 largo
-      if (obj.spriteSheet && obj.spriteSheet.url && obj.spriteSheet.url.length > BASE64_THRESH) {
-        obj.spriteSheet = { ...obj.spriteSheet, url: undefined };
-      }
-      // Strip frames base64 de animaciones — cada frame puede pesar 50-200KB
-      if (obj.animations && obj.animations.length) {
-        obj.animations = obj.animations.map(anim => {
-          if (!anim.frames || !anim.frames.length) return anim;
-          const hasBase64Frames = anim.frames.some(f => f && f.length > BASE64_THRESH);
-          if (!hasBase64Frames) return anim;
-          // Quitar frames — el receptor los tiene del full sync previo
-          return { ...anim, frames: [] };
-        });
-      }
-      return obj;
-    });
-
     data._fromSocketId = this.socket?.id;
     data._sessionCode  = this.sessionCode;
     return data;
@@ -22758,6 +22895,21 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on('project-update', (data) => {
     const code = data._sessionCode;
     if (code) socket.to(code).emit('project-update', { ...data, _fromSocketId: socket.id });
+  });
+  // ── Protocolo de texturas (CRÍTICO — agregar estos dos handlers) ──
+  // El cliente que tiene la textura responde al que la pide, en chunks de 200KB.
+  // targetId: si existe, enviar solo a ese socket; si no, broadcast a la sala.
+  socket.on('texture-request', (data) => {
+    const { sessionCode, targetId, fromId } = data;
+    // Reenviar la solicitud a quien tiene la textura (el que hizo el update)
+    if (targetId) socket.to(targetId).emit('texture-request', { ...data, fromId: socket.id });
+    else if (sessionCode) socket.to(sessionCode).emit('texture-request', { ...data, fromId: socket.id });
+  });
+  socket.on('texture-chunk', (data) => {
+    const { sessionCode, targetId } = data;
+    // Reenviar chunk al receptor que lo pidió
+    if (targetId) socket.to(targetId).emit('texture-chunk', data);
+    else if (sessionCode) socket.to(sessionCode).emit('texture-chunk', data);
   });
   socket.on('srv-save',  ({ reqId, userId, data })  => { /* guardar proyecto */ socket.emit('srv-response', { reqId, ok:true, data:{id} }); });
   socket.on('srv-list',  ({ reqId, userId })         => { /* listar proyectos */ socket.emit('srv-response', { reqId, ok:true, data:[...] }); });
