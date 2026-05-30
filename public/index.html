@@ -21691,6 +21691,7 @@ const CD = {
   _canvasReady:  false,     // guest: true cuando ya recibió el canvas inicial del host
   _broadcastingTimer: null, // timer handle para limpiar _broadcasting
   _retryTimer:   null,      // timer para reintentar send cuando DataChannel no está listo
+  _cuBuf:        {},        // buffer para ensamblar canvas-update-chunk
 
   /* ════════════ ABRIR / CERRAR ════════════ */
   open() {
@@ -21958,6 +21959,23 @@ case 'firebase-updated': {
         }, 4000);
         break;
 
+      case 'canvas-update-chunk': {
+        // Ensamblar canvas-update grande que llegó en partes
+        if (!this._cuBuf) this._cuBuf = {};
+        const cuid = data._txId;
+        if (!this._cuBuf[cuid]) this._cuBuf[cuid] = { chunks: new Array(data._total), got: 0 };
+        const cubuf = this._cuBuf[cuid];
+        if (cubuf.chunks[data._idx] === undefined) { cubuf.chunks[data._idx] = data._chunk; cubuf.got++; }
+        if (cubuf.got >= data._total) {
+          delete this._cuBuf[cuid];
+          try {
+            const parsed = JSON.parse(cubuf.chunks.join(''));
+            this._handleMsg(parsed, fromId); // re-procesar como canvas-update normal
+          } catch(e) { this._log('⚠ Error ensamblando canvas-update: ' + e.message); }
+        }
+        break;
+      }
+
       case 'canvas-update':
         // Alguien (host o guest via relay) envió un update
         if (data.fromId === this.myPeerId) break; // es mío, ignorar
@@ -21966,7 +21984,10 @@ case 'firebase-updated': {
         this._log('📥 Canvas recibido de ' + (this._peers[data.fromId]?.name || data.fromId));
         // Si soy host, relay a todos los demás guests (excepto quien lo envió)
         if (this.isHost) {
-          this._broadcastExcept(fromId, data);
+          // Relay usando _sendMsg para soportar payloads grandes
+          Object.entries(this._conns).forEach(([id, conn]) => {
+            if (id !== fromId && conn.open) this._sendMsg(conn, data);
+          });
           const others = Object.keys(this._conns).filter(id => id !== fromId).length;
           if (others > 0) this._log('🔁 Relay a ' + others + ' co-director(es)');
         }
@@ -22368,9 +22389,43 @@ case 'firebase-updated': {
     }
   },
 
+  /* ── Límite seguro por mensaje en el DataChannel de PeerJS ── */
+  _MSG_LIMIT: 60000, // 60KB — igual que snapshot chunks
+
+  /* Envía un canvas-update partiendo el JSON en chunks si es necesario */
+  _sendMsg(connOrNull, msg) {
+    // connOrNull: null = broadcast (host), DataConnection = envío directo (guest)
+    const json = JSON.stringify(msg);
+    const CS   = this._MSG_LIMIT;
+    if (json.length <= CS) {
+      // Mensaje chico: enviar directo
+      if (connOrNull) {
+        if (connOrNull.open) try { connOrNull.send(msg); } catch(e) { this._log('❌ send: ' + e.message); }
+      } else {
+        this._broadcastAll(msg);
+      }
+      return;
+    }
+    // Mensaje grande: chunking
+    const total = Math.ceil(json.length / CS);
+    const txId  = Math.random().toString(36).slice(2);
+    const sendChunk = (conn, idx) => {
+      const chunk = json.slice(idx * CS, (idx + 1) * CS);
+      const cm = { _type: 'canvas-update-chunk', _txId: txId, _idx: idx, _total: total, _chunk: chunk };
+      setTimeout(() => { if (conn && conn.open) try { conn.send(cm); } catch(e) {} }, idx * 30);
+    };
+    if (connOrNull) {
+      for (let i = 0; i < total; i++) sendChunk(connOrNull, i);
+    } else {
+      Object.values(this._conns).forEach(conn => {
+        for (let i = 0; i < total; i++) sendChunk(conn, i);
+      });
+    }
+    this._log('📦 Update grande: ' + total + ' chunks (' + Math.round(json.length/1024) + 'KB)');
+  },
+
   _sendCanvasUpdate() {
     if (!this.connected || this._broadcasting) return;
-    // Guest: no enviar hasta recibir el canvas inicial del host (evita sobreescribir con STATE vacío)
     if (!this.isHost && !this._canvasReady) return;
     try {
       const payload = _buildSaveData();
@@ -22378,34 +22433,25 @@ case 'firebase-updated': {
       if (this.isHost) {
         const n = Object.keys(this._conns).length;
         if (n === 0) return;
-        this._broadcastAll(msg);
+        this._sendMsg(null, msg);
         this._log('📤 Canvas enviado a ' + n + ' co-director(es)');
       } else {
-        // Guest → host
-        if (!this._hostConn) {
-          this._log('⚠ Sin conexión al host (_hostConn null)');
-          return;
-        }
+        if (!this._hostConn) { this._log('⚠ Sin conexión al host'); return; }
         if (!this._hostConn.open) {
-          // DataChannel no está listo aún — encolar y reintentar
           this._log('⏳ Canal no listo — reintentando en 300ms…');
           clearTimeout(this._retryTimer);
           this._retryTimer = setTimeout(() => {
             if (this._hostConn && this._hostConn.open) {
-              try { this._hostConn.send(msg); this._log('📤 Canvas enviado al host (reintento)'); }
+              try { this._sendMsg(this._hostConn, msg); this._log('📤 Canvas enviado al host (reintento)'); }
               catch(e) { this._log('❌ Error en reintento: ' + e.message); }
             } else {
-              this._log('❌ Canal sigue cerrado — update descartado. Estado: ' + (this._hostConn ? this._hostConn.peerConnection?.connectionState : 'null'));
+              this._log('❌ Canal sigue cerrado — update descartado');
             }
           }, 300);
           return;
         }
-        try {
-          this._hostConn.send(msg);
-          this._log('📤 Canvas enviado al host');
-        } catch(e) {
-          this._log('❌ Error enviando al host: ' + e.message);
-        }
+        this._sendMsg(this._hostConn, msg);
+        this._log('📤 Canvas enviado al host');
       }
     } catch(e) { this._log('❌ Error en _sendCanvasUpdate: ' + e.message); }
   },
@@ -22525,6 +22571,7 @@ case 'firebase-updated': {
     clearTimeout(this._broadcastingTimer);
     clearTimeout(this._retryTimer);
     this._broadcasting = false;
+    this._cuBuf = {};
     this._clearCursors();
     this._updateTopBtn(false);
     document.getElementById('cd-pane-setup').style.display     = 'block';
