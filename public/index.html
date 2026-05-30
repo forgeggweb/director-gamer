@@ -9072,6 +9072,12 @@ function _restoreAssets(data, _preserveUrls) {
       if (n > maxId) maxId = n;
     });
     if (maxId >= assetIdCounter) assetIdCounter = maxId + 1;
+    // Sincronizar IDB: borrar obsoletos, guardar actuales (solo si no es update Co-Director incremental)
+    if (!_preserveUrls && _assetDB) {
+      const tx = _assetDB.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
+      ASSETS.forEach(a => { const s = { ...a }; delete s.audioEl; tx.objectStore(IDB_STORE).put(s); });
+    }
     renderAssetGrid();
   }
 }
@@ -11243,10 +11249,13 @@ function placeAssetOnCanvas(a, wx, wy) {
 
 /* ─── Add asset to library ─── */
 function addAssetToLib(asset) {
-  // Evitar duplicados: si ya existe un asset con el mismo id, actualizar en lugar de agregar
-  const existing = ASSETS.findIndex(a => a.id === asset.id);
-  if (existing > -1) { ASSETS[existing] = asset; }
-  else { ASSETS.push(asset); }
+  // Upsert: si ya existe el id, actualizar en lugar de duplicar
+  const idx = ASSETS.findIndex(a => a.id === asset.id);
+  if (idx > -1) {
+    ASSETS[idx] = asset;
+  } else {
+    ASSETS.push(asset);
+  }
   renderAssetGrid(document.getElementById('am-search')?.value?.toLowerCase() || '');
   // also refresh bottom assets pane
   refreshBottomAssets();
@@ -11328,17 +11337,20 @@ function setIdbStatus(ok) {
     await openAssetDB();
     const saved = await idbLoadAllAssets();
     if (saved.length) {
-      // Restore only if ASSETS is empty (fresh load, not from project save)
-      if (ASSETS.length === 0) {
-        saved.forEach(a => {
-          if (!ASSETS.some(x => x.id === a.id)) {
-            ASSETS.push(a);
-          }
-          assetIdCounter = Math.max(assetIdCounter, parseInt((a.id||'').replace('asset','')) + 1 || 1);
-        });
+      // Merge: agregar solo los que no existen aún (dedup por id)
+      let added = 0;
+      saved.forEach(a => {
+        const existing = ASSETS.findIndex(x => x.id === a.id);
+        if (existing === -1) {
+          ASSETS.push(a);
+          added++;
+        }
+        assetIdCounter = Math.max(assetIdCounter, parseInt((a.id||'').replace('asset','')) + 1 || 1);
+      });
+      if (added > 0) {
         renderAssetGrid();
         refreshBottomAssets();
-        addLog('info', `${saved.length} assets restaurados desde IndexedDB.`);
+        addLog('info', `${added} assets restaurados desde IndexedDB.`);
       }
     }
     setIdbStatus(true);
@@ -17667,8 +17679,8 @@ const SceneManager = {
     STATE.objects = sc.objects.map(o => JSON.parse(JSON.stringify(o)));
     STATE.actors  = sc.actors.map(a => JSON.parse(JSON.stringify(a)));
     // Limpiar canvas antes de re-renderizar para evitar elementos DOM duplicados
-    const wc = document.getElementById('world-canvas');
-    if (wc) wc.innerHTML = '';
+    const _wcrs = document.getElementById('world-canvas');
+    if (_wcrs) _wcrs.innerHTML = '';
     if (typeof renderWorldObj   === 'function') { STATE.objects.forEach(o => renderWorldObj(o)); }
     if (typeof renderActorLib   === 'function') renderActorLib();
     if (typeof renderSceneTree  === 'function') renderSceneTree();
@@ -21925,6 +21937,30 @@ case 'firebase-updated': {
           if (!this.isHost) this._canvasReady = true;
           this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
           toast('✅ Canvas y texturas cargados');
+          // Pedir al host las texturas que Firebase no tenga (assets nuevos sin guardar)
+          setTimeout(() => {
+            if (!this.connected || !this._hostConn || !this._hostConn.open) return;
+            (typeof ASSETS !== 'undefined' ? ASSETS : []).forEach(a => {
+              if (a._hasTexture && (!a.url || a.url.length <= 300)) {
+                try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, assetId: a.id }); } catch(e) {}
+              }
+            });
+            (STATE.objects || []).forEach(o => {
+              if (o._needsTexture && !o.imgUrl && !(o.spriteSheet && o.spriteSheet.url)) {
+                try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, objId: o.id }); } catch(e) {}
+              }
+              (o.animations || []).forEach((anim, animIdx) => {
+                if (anim._hasGif && (!anim.gifUrl || anim.gifUrl.length <= 300)) {
+                  try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, objId: o.id, animIdx, isGif: true }); } catch(e) {}
+                }
+                if (anim._framesCount && (!anim.frames || anim.frames.length === 0)) {
+                  for (let fi = 0; fi < anim._framesCount; fi++) {
+                    try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, objId: o.id, animIdx, frameIdx: fi }); } catch(e) {}
+                  }
+                }
+              });
+            });
+          }, 800);
         }).catch(err => {
           this._log('⚠ Firebase error: ' + (err.message || err));
         });
