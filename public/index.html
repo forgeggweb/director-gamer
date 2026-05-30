@@ -11243,6 +11243,8 @@ function placeAssetOnCanvas(a, wx, wy) {
 
 /* ─── Add asset to library ─── */
 function addAssetToLib(asset) {
+  // Evitar duplicados: si ya existe un asset con el mismo id, no agregar
+  if (ASSETS.some(a => a.id === asset.id)) return;
   ASSETS.push(asset);
   renderAssetGrid(document.getElementById('am-search')?.value?.toLowerCase() || '');
   // also refresh bottom assets pane
