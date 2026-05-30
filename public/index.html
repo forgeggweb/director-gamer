@@ -11352,14 +11352,12 @@ window.addAssetToLib = function(asset) {
   renderTagFilterRow();
   if (typeof CD !== 'undefined' && CD.connected) {
     if (CD.isHost) {
-      // Host en Co-Director: guardar en Firebase (con debounce 900ms para acumular imports)
-      // _doSave ya guarda con base64 completo y manda firebase-updated a todos los guests
+      // Host: guardar en Firebase con todas las texturas y notificar guests
       clearTimeout(window._cdAssetSaveTimer);
       window._cdAssetSaveTimer = setTimeout(() => {
         if (typeof _doSave === 'function') _doSave(true);
       }, 900);
     } else {
-      // Guest: anunciar al host para que haga relay
       CD._announceUpdate();
     }
   }
@@ -16232,12 +16230,14 @@ function loadFromServer(id) {
 // Función unificada de aplicar datos de proyecto
 function _applyProjectData(data, _fromCD) {
   try {
+    CD._applyingData = true;   // bloquear MutationObserver durante la aplicación
     if (data.projectName) document.getElementById('proj-name-badge').textContent = data.projectName;
     STATE.layers      = data.layers      || STATE.layers;
     STATE.activeLayer = data.activeLayer || STATE.activeLayer;
     const wc = document.getElementById('world-canvas');
     if (wc) {
       wc.innerHTML = '';
+      dragging = null;   // resetear drag — los divs viejos ya no existen
       if (data.worldW && data.worldH) {
         wc.style.width  = data.worldW + 'px';
         wc.style.height = data.worldH + 'px';
@@ -16364,6 +16364,7 @@ function _applyProjectData(data, _fromCD) {
     // No limpiar historial cuando viene de Co-Director (evita side-effects en _updateUI)
     if (!_fromCD && typeof CommandHistory !== 'undefined') CommandHistory.clear();
   } catch(e) { console.error('_applyProjectData error:', e); }
+  finally { if (typeof CD !== 'undefined') CD._applyingData = false; }
 }
 
 
@@ -22000,7 +22001,7 @@ case 'firebase-updated': {
       case 'canvas-update':
         // Alguien (host o guest via relay) envió un update
         if (data.fromId === this.myPeerId) break; // es mío, ignorar
-        this._setBroadcasting(200);
+        this._setBroadcasting(1500);  // ventana amplia para que DOM termine de actualizarse
         try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
         this._log('📥 Canvas recibido de ' + (this._peers[data.fromId]?.name || data.fromId));
         // Si soy host, relay a todos los demás guests (excepto quien lo envió)
@@ -22478,9 +22479,9 @@ case 'firebase-updated': {
   },
 
   scheduleUpdate() {
-    if (!this.connected || this._broadcasting) return;
+    if (!this.connected || this._broadcasting || this._applyingData) return;
     clearTimeout(this._syncTimer);
-    this._syncTimer = setTimeout(() => this._sendCanvasUpdate(), 150);
+    this._syncTimer = setTimeout(() => this._sendCanvasUpdate(), 400);
   },
 
   /* ════════════ DETECCIÓN DE CAMBIOS ════════════ */
@@ -22492,12 +22493,12 @@ case 'firebase-updated': {
     const wc = document.getElementById('world-canvas');
     if (wc) {
       this._mutObs = new MutationObserver(() => {
-        if (!this._broadcasting) this.scheduleUpdate();
+        if (!this._broadcasting && !this._applyingData) this.scheduleUpdate();
       });
       this._mutObs.observe(wc, {
         childList: true, subtree: true,
         attributes: true, attributeFilter: ['style', 'class', 'data-x', 'data-y', 'data-w', 'data-h'],
-        characterData: true
+        characterData: false   // characterData causa storms con img.src — desactivado
       });
     }
 
