@@ -21907,32 +21907,56 @@ const CD = {
 
 case 'firebase-updated': {
         // Host guardó en Firebase — recargar para obtener texturas actualizadas
-        if (!data.projectId || !window._SRV || typeof window._SRV.loadProject !== 'function') break;
-        window._SRV.loadProject(data.projectId).then(fbData => {
-          if (!fbData) return;
-          this._setBroadcasting(500);
-          try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
-          if (!this.isHost) this._canvasReady = true;
-          this._log('☁️ Canvas actualizado desde Firebase');
-        }).catch(() => {});
+        if (!data.projectId) break;
+        const _doReload = (retries) => {
+          if (!window._SRV || typeof window._SRV.loadProject !== 'function') {
+            if (retries > 0) { setTimeout(() => _doReload(retries - 1), 500); }
+            return;
+          }
+          window._SRV.loadProject(data.projectId).then(fbData => {
+            if (!fbData) return;
+            this._setBroadcasting(500);
+            try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
+            if (!this.isHost) this._canvasReady = true;
+            this._log('☁️ Canvas actualizado desde Firebase');
+          }).catch(err => {
+            this._log('⚠ firebase-updated error: ' + (err.code || err.message || err));
+          });
+        };
+        _doReload(6);
         break;
       }
 
       case 'load-from-firebase': {
         // Host nos dice que cargamos el proyecto directamente desde Firebase
-        if (!data.projectId || !window._SRV || typeof window._SRV.loadProject !== 'function') break;
-        this._log('☁️ Cargando desde Firebase: ' + data.projectId);
-        toast('☁️ Cargando texturas desde Firebase…');
-        window._SRV.loadProject(data.projectId).then(fbData => {
-          if (!fbData) { this._log('⚠ Firebase: proyecto no encontrado'); return; }
-          this._setBroadcasting(500);
-          try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
-          if (!this.isHost) this._canvasReady = true;
-          this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
-          toast('✅ Canvas y texturas cargados');
-        }).catch(err => {
-          this._log('⚠ Firebase error: ' + (err.message || err));
-        });
+        // _SRV se define en un <script type="module"> — puede llegar antes que esté listo.
+        // Reintentar hasta 3s si aún no está disponible.
+        const _doLoadFromFirebase = (retries) => {
+          if (!window._SRV || typeof window._SRV.loadProject !== 'function') {
+            if (retries > 0) {
+              this._log('⏳ Esperando _SRV para cargar Firebase (' + retries + ')…');
+              setTimeout(() => _doLoadFromFirebase(retries - 1), 500);
+            } else {
+              this._log('⚠ _SRV no disponible — no se pudo cargar desde Firebase');
+            }
+            return;
+          }
+          if (!data.projectId) { this._log('⚠ load-from-firebase sin projectId'); return; }
+          this._log('☁️ Cargando desde Firebase: ' + data.projectId);
+          toast('☁️ Cargando proyecto desde Firebase…');
+          window._SRV.loadProject(data.projectId).then(fbData => {
+            if (!fbData) { this._log('⚠ Firebase: proyecto no encontrado'); toast('⚠️ Proyecto no encontrado en Firebase'); return; }
+            this._setBroadcasting(500);
+            try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
+            if (!this.isHost) this._canvasReady = true;
+            this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
+            toast('✅ Canvas y texturas cargados');
+          }).catch(err => {
+            this._log('⚠ Firebase error: ' + (err.code || err.message || err));
+            toast('⚠️ Error Firebase: ' + (err.code || err.message || 'desconocido'));
+          });
+        };
+        _doLoadFromFirebase(6); // hasta 6 × 500ms = 3s de espera
         break;
       }
 
@@ -22261,15 +22285,16 @@ case 'firebase-updated': {
   /* ════════════ ENVIAR CANVAS ════════════ */
   _sendSnapshotTo(conn) {
     try {
-      // Si hay ID de proyecto en Firebase, decirle al guest que lo cargue directamente
-      // Esto es mucho más eficiente que transferir todo por PeerJS
+      // Si hay ID de proyecto en Firebase, decirle al guest que lo cargue directamente.
+      // NO enviar también el snapshot local — causaría race condition donde el snapshot
+      // llegaría antes que Firebase resuelva y pisar el canvas.
       const firebaseId = window._CD_currentProjectId || null;
       if (firebaseId && window._SRV && typeof window._SRV.loadProject === 'function') {
         conn.send({ _type: 'load-from-firebase', fromId: this.myPeerId, projectId: firebaseId });
         this._log('☁️ Enviando ID de Firebase al guest: ' + firebaseId);
-        // También enviar snapshot local como fallback
+        return; // ← solo Firebase, no enviar snapshot local también
       }
-      // Usar snapshot COMPLETO con todas las base64 embebidas
+      // Sin Firebase — snapshot COMPLETO con todas las base64 embebidas
       const payload = _buildSaveDataFull();
       const fullMsg = JSON.stringify({ _type: 'snapshot', fromId: this.myPeerId, payload });
       const CS = 60000; // 60KB por chunk
