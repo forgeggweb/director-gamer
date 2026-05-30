@@ -21877,8 +21877,8 @@ const CD = {
     const prof = this._getProfile();
     const inp  = document.getElementById('cd-my-name');
     if (inp && prof.name) inp.value = prof.name;
-    this._populateProjects();
-    this._loadServerUrl();
+    this._loadServerUrl();        // primero cargar URL guardada
+    this._populateProjects();     // después usarla para listar proyectos
     document.getElementById('cd-overlay').classList.add('open');
   },
   close() { document.getElementById('cd-overlay').classList.remove('open'); },
@@ -21887,22 +21887,39 @@ const CD = {
   _populateProjects() {
     const list = document.getElementById('cd-proj-list');
     if (!list) return;
-    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⏳ Cargando proyectos…</div>';
 
-    if (!window._SRV._socket || !window._SRV._socket.connected) {
-      // Conectar solo para listar
-      const serverUrl = window._DG_SERVER_URL || undefined;
-      const tmpSock = serverUrl ? io(serverUrl, { transports: ['websocket','polling'] }) : io({ transports: ['websocket','polling'] });
-      tmpSock.once('connect', () => {
-        window._SRV._attach(tmpSock);
-        this._loadProjList(list);
-      });
-      tmpSock.once('connect_error', () => {
-        list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⚠️ Sin conexión al servidor</div>';
-      });
+    const serverUrl = (window._DG_SERVER_URL || '').trim();
+
+    // Sin URL configurada → pedir que la ingresen
+    if (!serverUrl) {
+      list.innerHTML = '<div style="font-size:11px;color:rgba(251,188,4,.7);text-align:center;padding:12px 8px;line-height:1.6;">Ingresá la URL de tu servidor Render<br><span style="opacity:.6">para ver y compartir proyectos</span></div>';
       return;
     }
-    this._loadProjList(list);
+
+    list.innerHTML = '<div style="font-size:11px;color:rgba(196,180,214,.4);text-align:center;padding:12px;">⏳ Cargando proyectos…</div>';
+
+    // Si ya hay socket conectado, usarlo directamente
+    if (window._SRV._socket && window._SRV._socket.connected) {
+      this._loadProjList(list);
+      return;
+    }
+
+    // Conectar temporalmente solo para listar
+    let tmpSock;
+    try {
+      tmpSock = io(serverUrl, { transports: ['websocket', 'polling'], timeout: 8000 });
+    } catch(e) {
+      list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.8);text-align:center;padding:12px;">❌ URL inválida</div>';
+      return;
+    }
+    tmpSock.once('connect', () => {
+      window._SRV._attach(tmpSock);
+      this._loadProjList(list);
+    });
+    tmpSock.once('connect_error', (err) => {
+      const msg = err && err.message ? err.message : 'Error de red';
+      list.innerHTML = '<div style="font-size:11px;color:rgba(234,67,53,.8);text-align:center;padding:10px 8px;line-height:1.6;">⚠️ Sin conexión al servidor<br><span style="font-size:9.5px;opacity:.6;">' + msg + '</span></div>';
+    });
   },
 
   _loadProjList(list) {
@@ -22011,28 +22028,53 @@ const CD = {
   },
 
   _doConnect(cb) {
-    // Conectar al servidor. Si hay URL configurada (window._DG_SERVER_URL), usarla.
-    const serverUrl = window._DG_SERVER_URL || undefined;
+    const serverUrl = (window._DG_SERVER_URL || '').trim();
 
-    // Si no hay URL y se abre localmente, mostrar error claro en vez de colgar
     if (!serverUrl) {
-      const isLocal = location.protocol === 'file:' || location.hostname === '' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-      if (isLocal) {
-        this._setStatus('red', 'Ingresá la URL del servidor Render en el campo "URL del Servidor"');
-        this._log('⚠️ Sin URL de servidor. Completá el campo "URL del Servidor" con tu URL de Render/Railway antes de conectar.');
-        return;
-      }
+      this._setStatus('red', 'Ingresá la URL del servidor en el campo de arriba');
+      this._log('❌ Sin URL de servidor configurada.');
+      return;
+    }
+
+    this._log('🔗 Conectando a ' + serverUrl + '…');
+
+    // Si el socket temporal de _populateProjects ya está conectado a la misma URL, reutilizarlo
+    if (window._SRV._socket && window._SRV._socket.connected &&
+        window._SRV._socket.io?.uri === serverUrl) {
+      this.socket = window._SRV._socket;
+      window._SRV._attach(this.socket);
+      this._attachHandlers(cb);
+      // Simular evento connect ya que ya está conectado
+      this._log('🔌 Reutilizando conexión existente');
+      cb();
+      return;
+    }
+
+    // Desconectar socket temporal si existe
+    if (window._SRV._socket && !this.socket) {
+      window._SRV._socket.disconnect();
+      window._SRV._socket = null;
     }
 
     try {
-      this.socket = serverUrl
-        ? io(serverUrl, { transports: ['websocket','polling'] })
-        : io({ transports: ['websocket','polling'] });
+      this.socket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 2000,
+        timeout: 10000,
+        withCredentials: false,
+      });
     } catch(e) {
       this._setStatus('red', 'Error al inicializar socket: ' + e.message);
+      this._log('❌ io() error: ' + e.message);
       return;
     }
     window._SRV._attach(this.socket);
+    this._attachHandlers(cb);
+  },
+
+  _attachHandlers(cb) {
 
     this.socket.on('connect', () => {
       this._log('🔌 Conectado al servidor');
@@ -22040,8 +22082,11 @@ const CD = {
     });
     this.socket.on('connect_error', (err) => {
       const msg = err && err.message ? err.message : 'Error de red';
-      this._setStatus('red', 'Sin conexión: ' + msg);
+      this._setStatus('red', 'Sin conexión — ' + msg);
       this._log('❌ connect_error: ' + msg);
+    });
+    this.socket.on('reconnect_attempt', (n) => {
+      this._setStatus('yellow', 'Reconectando… (intento ' + n + ')');
     });
 
     this.socket.on('session-created', ({ code, peers }) => this._onSessionReady(code, peers));
