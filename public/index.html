@@ -9072,11 +9072,14 @@ function _restoreAssets(data, _preserveUrls) {
       if (n > maxId) maxId = n;
     });
     if (maxId >= assetIdCounter) assetIdCounter = maxId + 1;
-    // Sincronizar IDB: borrar obsoletos, guardar actuales (solo si no es update Co-Director incremental)
+    // Sincronizar IDB con el estado actual (borrar obsoletos, guardar actuales)
+    // Solo en carga completa de proyecto (no en updates incrementales Co-Director)
     if (!_preserveUrls && _assetDB) {
-      const tx = _assetDB.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).clear();
-      ASSETS.forEach(a => { const s = { ...a }; delete s.audioEl; tx.objectStore(IDB_STORE).put(s); });
+      try {
+        const _tx = _assetDB.transaction(IDB_STORE, 'readwrite');
+        _tx.objectStore(IDB_STORE).clear();
+        ASSETS.forEach(a => { const s = { ...a }; delete s.audioEl; _tx.objectStore(IDB_STORE).put(s); });
+      } catch(e) {}
     }
     renderAssetGrid();
   }
@@ -11250,12 +11253,9 @@ function placeAssetOnCanvas(a, wx, wy) {
 /* ─── Add asset to library ─── */
 function addAssetToLib(asset) {
   // Upsert: si ya existe el id, actualizar en lugar de duplicar
-  const idx = ASSETS.findIndex(a => a.id === asset.id);
-  if (idx > -1) {
-    ASSETS[idx] = asset;
-  } else {
-    ASSETS.push(asset);
-  }
+  const _aidx = ASSETS.findIndex(a => a.id === asset.id);
+  if (_aidx > -1) { ASSETS[_aidx] = asset; }
+  else { ASSETS.push(asset); }
   renderAssetGrid(document.getElementById('am-search')?.value?.toLowerCase() || '');
   // also refresh bottom assets pane
   refreshBottomAssets();
@@ -11337,11 +11337,10 @@ function setIdbStatus(ok) {
     await openAssetDB();
     const saved = await idbLoadAllAssets();
     if (saved.length) {
-      // Merge: agregar solo los que no existen aún (dedup por id)
+      // Merge: solo agregar los que no existen aún (dedup por id)
       let added = 0;
       saved.forEach(a => {
-        const existing = ASSETS.findIndex(x => x.id === a.id);
-        if (existing === -1) {
+        if (!ASSETS.some(x => x.id === a.id)) {
           ASSETS.push(a);
           added++;
         }
@@ -11366,8 +11365,37 @@ window.addAssetToLib = function(asset) {
   _origAddAssetToLib(asset);
   idbSaveAsset(asset);
   renderTagFilterRow();
-  // Anunciar asset nuevo — el receptor lo pedirá
-  if (typeof CD !== 'undefined' && CD.connected) CD._announceUpdate();
+  // Si estamos en Co-Director como host, guardar en Firebase para que
+  // todos los guests reciban las texturas completas via firebase-updated
+  if (typeof CD !== 'undefined' && CD.connected && CD.isHost) {
+    // Debounce: esperar 800ms para acumular múltiples assets (ej: spritesheet)
+    clearTimeout(window._cdAssetSaveTimer);
+    window._cdAssetSaveTimer = setTimeout(() => {
+      if (window._SRV && typeof window._SRV.saveProject === 'function') {
+        const _fullData = _buildSaveDataFull();
+        const _sp = window._SRV.saveProject(_fullData, true);
+        const _afterSave = (result) => {
+          if (result && (result.id || result.projectId)) {
+            window._CD_currentProjectId = result.id || result.projectId;
+          }
+          if (!window._CD_currentProjectId) window._CD_currentProjectId = _fullData.projectName;
+          // Notificar a todos los guests que recarguen desde Firebase
+          if (CD.connected && window._CD_currentProjectId) {
+            CD._broadcastAll({ _type: 'firebase-updated', fromId: CD.myPeerId, projectId: window._CD_currentProjectId });
+            CD._log('☁️ Asset guardado en Firebase — guests notificados');
+          }
+        };
+        if (_sp && typeof _sp.then === 'function') { _sp.then(_afterSave).catch(() => { CD._announceUpdate(); }); }
+        else { setTimeout(() => _afterSave(null), 500); }
+      } else {
+        // Sin Firebase: enviar texturas por PeerJS
+        CD._announceUpdate();
+      }
+    }, 800);
+  } else if (typeof CD !== 'undefined' && CD.connected) {
+    // Soy guest: solo anunciar update al host
+    CD._announceUpdate();
+  }
 };
 
 /* ── Patch deleteAsset to also remove from IDB ── */
@@ -21921,6 +21949,16 @@ case 'firebase-updated': {
           try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
           if (!this.isHost) this._canvasReady = true;
           this._log('☁️ Canvas actualizado desde Firebase');
+          // Pedir al host las texturas que aún falten (assets muy nuevos no guardados aún)
+          if (!this.isHost && this._hostConn && this._hostConn.open) {
+            setTimeout(() => {
+              (typeof ASSETS !== 'undefined' ? ASSETS : []).forEach(a => {
+                if (a._hasTexture && (!a.url || a.url.length <= 300)) {
+                  try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, assetId: a.id }); } catch(e) {}
+                }
+              });
+            }, 600);
+          }
         }).catch(() => {});
         break;
       }
@@ -21937,30 +21975,6 @@ case 'firebase-updated': {
           if (!this.isHost) this._canvasReady = true;
           this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
           toast('✅ Canvas y texturas cargados');
-          // Pedir al host las texturas que Firebase no tenga (assets nuevos sin guardar)
-          setTimeout(() => {
-            if (!this.connected || !this._hostConn || !this._hostConn.open) return;
-            (typeof ASSETS !== 'undefined' ? ASSETS : []).forEach(a => {
-              if (a._hasTexture && (!a.url || a.url.length <= 300)) {
-                try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, assetId: a.id }); } catch(e) {}
-              }
-            });
-            (STATE.objects || []).forEach(o => {
-              if (o._needsTexture && !o.imgUrl && !(o.spriteSheet && o.spriteSheet.url)) {
-                try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, objId: o.id }); } catch(e) {}
-              }
-              (o.animations || []).forEach((anim, animIdx) => {
-                if (anim._hasGif && (!anim.gifUrl || anim.gifUrl.length <= 300)) {
-                  try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, objId: o.id, animIdx, isGif: true }); } catch(e) {}
-                }
-                if (anim._framesCount && (!anim.frames || anim.frames.length === 0)) {
-                  for (let fi = 0; fi < anim._framesCount; fi++) {
-                    try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, objId: o.id, animIdx, frameIdx: fi }); } catch(e) {}
-                  }
-                }
-              });
-            });
-          }, 800);
         }).catch(err => {
           this._log('⚠ Firebase error: ' + (err.message || err));
         });
