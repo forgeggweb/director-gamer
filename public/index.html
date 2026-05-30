@@ -21690,6 +21690,7 @@ const CD = {
   _mutObs:       null,
   _canvasReady:  false,     // guest: true cuando ya recibió el canvas inicial del host
   _broadcastingTimer: null, // timer handle para limpiar _broadcasting
+  _retryTimer:   null,      // timer para reintentar send cuando DataChannel no está listo
 
   /* ════════════ ABRIR / CERRAR ════════════ */
   open() {
@@ -21828,9 +21829,20 @@ const CD = {
 
         this._showConnected(false);
         this._setStatus2('green', 'Conectado al host');
-        this._log('✅ Conectado — esperando canvas…');
+        this._log('✅ Conectado — canal: ' + (conn.open ? 'abierto ✓' : 'pendiente…'));
+        this._log('🔗 Esperando canvas del host…');
         this._updateTopBtn(true);
         this._patchSync();
+
+        // Diagnóstico: loguear estado del DataChannel cada 2s durante los primeros 10s
+        let _diagCount = 0;
+        const _diagTimer = setInterval(() => {
+          if (!this.connected || _diagCount++ >= 5) { clearInterval(_diagTimer); return; }
+          const pc = conn.peerConnection;
+          const ice = pc ? pc.iceConnectionState : 'n/a';
+          const dc  = pc ? pc.connectionState    : 'n/a';
+          this._log('🔍 ICE: ' + ice + ' · Conn: ' + dc + ' · Canal: ' + (conn.open ? 'open' : 'closed') + ' · canvasReady: ' + this._canvasReady);
+        }, 2000);
       });
 
       conn.on('data', data => {
@@ -22364,15 +22376,38 @@ case 'firebase-updated': {
       const payload = _buildSaveData();
       const msg = { _type: 'canvas-update', fromId: this.myPeerId, payload };
       if (this.isHost) {
+        const n = Object.keys(this._conns).length;
+        if (n === 0) return;
         this._broadcastAll(msg);
-        this._log('📤 Canvas enviado a ' + Object.keys(this._conns).length + ' co-director(es)');
-      } else if (this._hostConn && this._hostConn.open) {
-        this._hostConn.send(msg);
-        this._log('📤 Canvas enviado al host');
+        this._log('📤 Canvas enviado a ' + n + ' co-director(es)');
       } else {
-        this._log('⚠ No se pudo enviar: sin conexión activa');
+        // Guest → host
+        if (!this._hostConn) {
+          this._log('⚠ Sin conexión al host (_hostConn null)');
+          return;
+        }
+        if (!this._hostConn.open) {
+          // DataChannel no está listo aún — encolar y reintentar
+          this._log('⏳ Canal no listo — reintentando en 300ms…');
+          clearTimeout(this._retryTimer);
+          this._retryTimer = setTimeout(() => {
+            if (this._hostConn && this._hostConn.open) {
+              try { this._hostConn.send(msg); this._log('📤 Canvas enviado al host (reintento)'); }
+              catch(e) { this._log('❌ Error en reintento: ' + e.message); }
+            } else {
+              this._log('❌ Canal sigue cerrado — update descartado. Estado: ' + (this._hostConn ? this._hostConn.peerConnection?.connectionState : 'null'));
+            }
+          }, 300);
+          return;
+        }
+        try {
+          this._hostConn.send(msg);
+          this._log('📤 Canvas enviado al host');
+        } catch(e) {
+          this._log('❌ Error enviando al host: ' + e.message);
+        }
       }
-    } catch(e) { this._log('❌ Error enviando canvas: ' + e.message); }
+    } catch(e) { this._log('❌ Error en _sendCanvasUpdate: ' + e.message); }
   },
 
   scheduleUpdate() {
@@ -22412,6 +22447,13 @@ case 'firebase-updated': {
       window.CommandHistory.push = (cmd) => {
         orig(cmd);
         if (this.connected && !this._broadcasting) this.scheduleUpdate();
+      };
+      // También parchear _stack.push — usado por drag/resize que bypassean CommandHistory.push()
+      const origStackPush = window.CommandHistory._stack.push.bind(window.CommandHistory._stack);
+      window.CommandHistory._stack.push = (...args) => {
+        const result = origStackPush(...args);
+        if (this.connected && !this._broadcasting) this.scheduleUpdate();
+        return result;
       };
       window.CommandHistory._cdPatched = true;
     }
@@ -22481,6 +22523,7 @@ case 'firebase-updated': {
     this._syncPatched = false;
     this._canvasReady = false;
     clearTimeout(this._broadcastingTimer);
+    clearTimeout(this._retryTimer);
     this._broadcasting = false;
     this._clearCursors();
     this._updateTopBtn(false);
