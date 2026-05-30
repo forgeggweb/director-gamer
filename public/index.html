@@ -11350,9 +11350,9 @@ window.addAssetToLib = function(asset) {
   _origAddAssetToLib(asset);
   idbSaveAsset(asset);
   renderTagFilterRow();
+  // Anunciar asset nuevo — el receptor lo pedirá
   if (typeof CD !== 'undefined' && CD.connected) {
     if (CD.isHost) {
-      // Host: guardar en Firebase con todas las texturas y notificar guests
       clearTimeout(window._cdAssetSaveTimer);
       window._cdAssetSaveTimer = setTimeout(() => {
         if (typeof _doSave === 'function') _doSave(true);
@@ -16230,14 +16230,14 @@ function loadFromServer(id) {
 // Función unificada de aplicar datos de proyecto
 function _applyProjectData(data, _fromCD) {
   try {
-    CD._applyingData = true;   // bloquear MutationObserver durante la aplicación
+    if (typeof CD !== 'undefined') CD._applyingData = true;
     if (data.projectName) document.getElementById('proj-name-badge').textContent = data.projectName;
     STATE.layers      = data.layers      || STATE.layers;
     STATE.activeLayer = data.activeLayer || STATE.activeLayer;
     const wc = document.getElementById('world-canvas');
     if (wc) {
       wc.innerHTML = '';
-      dragging = null;   // resetear drag — los divs viejos ya no existen
+      dragging = null;
       if (data.worldW && data.worldH) {
         wc.style.width  = data.worldW + 'px';
         wc.style.height = data.worldH + 'px';
@@ -22001,7 +22001,7 @@ case 'firebase-updated': {
       case 'canvas-update':
         // Alguien (host o guest via relay) envió un update
         if (data.fromId === this.myPeerId) break; // es mío, ignorar
-        this._setBroadcasting(1500);  // ventana amplia para que DOM termine de actualizarse
+        this._setBroadcasting(1500);
         try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
         this._log('📥 Canvas recibido de ' + (this._peers[data.fromId]?.name || data.fromId));
         // Si soy host, relay a todos los demás guests (excepto quien lo envió)
@@ -22498,7 +22498,7 @@ case 'firebase-updated': {
       this._mutObs.observe(wc, {
         childList: true, subtree: true,
         attributes: true, attributeFilter: ['style', 'class', 'data-x', 'data-y', 'data-w', 'data-h'],
-        characterData: false   // characterData causa storms con img.src — desactivado
+        characterData: false
       });
     }
 
