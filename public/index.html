@@ -21791,7 +21791,16 @@ const CD = {
       this._broadcastAll({ _type: 'peers-list', peers: this._peersList() });
     });
 
-    conn.on('error', e => this._log('❌ Error guest ' + conn.peer + ': ' + (e.message||e.type||e)));
+    conn.on('error', e => {
+      const emsg = e.message || e.type || String(e);
+      if (emsg.toLowerCase().includes('message') && emsg.toLowerCase().includes('big')) {
+        this._log('⚠ Mensaje grande detectado para guest ' + conn.peer + ' — usando chunking forzado');
+        // Reducir límite para futuras transmisiones
+        this._MSG_LIMIT = Math.min(this._MSG_LIMIT, 4000);
+      } else {
+        this._log('❌ Error guest ' + conn.peer + ': ' + emsg);
+      }
+    });
   },
 
   /* ════════════ GUEST ════════════ */
@@ -22390,7 +22399,7 @@ case 'firebase-updated': {
   },
 
   /* ── Límite seguro por mensaje en el DataChannel de PeerJS ── */
-  _MSG_LIMIT: 60000, // 60KB — igual que snapshot chunks
+  _MSG_LIMIT: 8000, // 8KB — límite conservador para DataChannel con serialization:'json'
 
   /* Envía un canvas-update partiendo el JSON en chunks si es necesario */
   _sendMsg(connOrNull, msg) {
@@ -22541,8 +22550,10 @@ case 'firebase-updated': {
 
   /* ════════════ BROADCAST HELPERS ════════════ */
   _broadcastAll(data) {
+    // Mensajes de control pequeños: enviar directo
+    // Para canvas-update usar _sendMsg que hace chunking automático
     Object.values(this._conns).forEach(conn => {
-      if (conn.open) { try { conn.send(data); } catch(e) {} }
+      if (conn.open) { try { conn.send(data); } catch(e) { this._log('❌ broadcast: ' + (e.message||e.type||e)); } }
     });
   },
   _broadcastExcept(excludeId, data) {
