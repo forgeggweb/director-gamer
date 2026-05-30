@@ -11243,7 +11243,7 @@ function placeAssetOnCanvas(a, wx, wy) {
 
 /* ─── Add asset to library ─── */
 function addAssetToLib(asset) {
-  if (ASSETS.some(a => a.id === asset.id)) return;   // evitar duplicados
+  if (ASSETS.some(a => a.id === asset.id)) return;
   ASSETS.push(asset);
   renderAssetGrid(document.getElementById('am-search')?.value?.toLowerCase() || '');
   // also refresh bottom assets pane
@@ -11351,21 +11351,15 @@ window.addAssetToLib = function(asset) {
   idbSaveAsset(asset);
   renderTagFilterRow();
   if (typeof CD !== 'undefined' && CD.connected) {
-    if (CD.isHost && window._SRV && typeof window._SRV.saveProject === 'function') {
-      // Host: guardar en Firebase con debounce 800ms y notificar guests via firebase-updated
+    if (CD.isHost) {
+      // Host en Co-Director: guardar en Firebase (con debounce 900ms para acumular imports)
+      // _doSave ya guarda con base64 completo y manda firebase-updated a todos los guests
       clearTimeout(window._cdAssetSaveTimer);
       window._cdAssetSaveTimer = setTimeout(() => {
-        const _fd = _buildSaveDataFull();
-        window._SRV.saveProject(_fd, true).then(result => {
-          if (result && (result.id || result.projectId))
-            window._CD_currentProjectId = result.id || result.projectId;
-          if (!window._CD_currentProjectId) window._CD_currentProjectId = _fd.projectName;
-          CD._broadcastAll({ _type: 'firebase-updated', fromId: CD.myPeerId, projectId: window._CD_currentProjectId });
-          CD._log('☁️ Asset guardado en Firebase — guests notificados');
-        }).catch(() => CD._announceUpdate());
-      }, 800);
+        if (typeof _doSave === 'function') _doSave(true);
+      }, 900);
     } else {
-      // Guest o sin Firebase: anunciar update normal
+      // Guest: anunciar al host para que haga relay
       CD._announceUpdate();
     }
   }
@@ -21919,16 +21913,6 @@ case 'firebase-updated': {
           try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
           if (!this.isHost) this._canvasReady = true;
           this._log('☁️ Canvas actualizado desde Firebase');
-          // Pedir al host las texturas que aún fallen tras cargar Firebase
-          if (!this.isHost && this._hostConn && this._hostConn.open) {
-            setTimeout(() => {
-              (typeof ASSETS !== 'undefined' ? ASSETS : []).forEach(a => {
-                if (a._hasTexture && (!a.url || a.url.length <= 300)) {
-                  try { this._hostConn.send({ _type: 'texture-request', fromId: this.myPeerId, assetId: a.id }); } catch(e) {}
-                }
-              });
-            }, 600);
-          }
         }).catch(() => {});
         break;
       }
