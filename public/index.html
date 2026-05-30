@@ -11243,9 +11243,10 @@ function placeAssetOnCanvas(a, wx, wy) {
 
 /* ─── Add asset to library ─── */
 function addAssetToLib(asset) {
-  // Evitar duplicados: si ya existe un asset con el mismo id, no agregar
-  if (ASSETS.some(a => a.id === asset.id)) return;
-  ASSETS.push(asset);
+  // Evitar duplicados: si ya existe un asset con el mismo id, actualizar en lugar de agregar
+  const existing = ASSETS.findIndex(a => a.id === asset.id);
+  if (existing > -1) { ASSETS[existing] = asset; }
+  else { ASSETS.push(asset); }
   renderAssetGrid(document.getElementById('am-search')?.value?.toLowerCase() || '');
   // also refresh bottom assets pane
   refreshBottomAssets();
@@ -11330,7 +11331,9 @@ function setIdbStatus(ok) {
       // Restore only if ASSETS is empty (fresh load, not from project save)
       if (ASSETS.length === 0) {
         saved.forEach(a => {
-          ASSETS.push(a);
+          if (!ASSETS.some(x => x.id === a.id)) {
+            ASSETS.push(a);
+          }
           assetIdCounter = Math.max(assetIdCounter, parseInt((a.id||'').replace('asset','')) + 1 || 1);
         });
         renderAssetGrid();
@@ -17663,6 +17666,9 @@ const SceneManager = {
     if (!sc) return;
     STATE.objects = sc.objects.map(o => JSON.parse(JSON.stringify(o)));
     STATE.actors  = sc.actors.map(a => JSON.parse(JSON.stringify(a)));
+    // Limpiar canvas antes de re-renderizar para evitar elementos DOM duplicados
+    const wc = document.getElementById('world-canvas');
+    if (wc) wc.innerHTML = '';
     if (typeof renderWorldObj   === 'function') { STATE.objects.forEach(o => renderWorldObj(o)); }
     if (typeof renderActorLib   === 'function') renderActorLib();
     if (typeof renderSceneTree  === 'function') renderSceneTree();
