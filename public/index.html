@@ -16303,7 +16303,8 @@ function _applyProjectData(data, _fromCD) {
 
     // Si llegamos de Co-Director, pedir via texture-request los assets que faltan
     // (aquellos marcados con _hasTexture:true pero sin url local)
-    if (_fromCD && window.CD && window.CD.connected) {
+    // Si los datos vienen de Firebase ya tienen URLs completas — no hace falta pedir nada
+    if (_fromCD && _fromCD !== 'firebase' && window.CD && window.CD.connected) {
       const _cdSend = (msg) => {
         msg._type   = 'texture-request';
         msg.fromId  = window.CD.myPeerId;  // 'fromId' para que _handleMsg lo identifique
@@ -21873,8 +21874,8 @@ case 'firebase-updated': {
         window._SRV.loadProject(data.projectId).then(fbData => {
           if (!fbData) return;
           this._broadcasting = true;
-          try { _applyProjectData(fbData, true); } catch(e) { console.error(e); }
-          this._broadcasting = false;
+          try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
+          setTimeout(() => { this._broadcasting = false; }, 500);
           this._log('☁️ Canvas actualizado desde Firebase');
         }).catch(() => {});
         break;
@@ -21888,8 +21889,8 @@ case 'firebase-updated': {
         window._SRV.loadProject(data.projectId).then(fbData => {
           if (!fbData) { this._log('⚠ Firebase: proyecto no encontrado'); return; }
           this._broadcasting = true;
-          try { _applyProjectData(fbData, true); } catch(e) { console.error(e); }
-          this._broadcasting = false;
+          try { _applyProjectData(fbData, 'firebase'); } catch(e) { console.error(e); }
+          setTimeout(() => { this._broadcasting = false; }, 500);
           this._log('✅ Proyecto cargado desde Firebase con todas las texturas');
           toast('✅ Canvas y texturas cargados');
         }).catch(err => {
@@ -21919,7 +21920,7 @@ case 'firebase-updated': {
         // Guest recibe snapshot inicial del canvas (con texturas embebidas)
         this._broadcasting = true;
         try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
-        this._broadcasting = false;
+        setTimeout(() => { this._broadcasting = false; }, 500);
         this._log('📂 Canvas recibido del host');
         toast('📂 Canvas cargado desde el host');
         // Retry: pedir texturas que no llegaron tras 4 segundos
@@ -21948,7 +21949,8 @@ case 'firebase-updated': {
         if (data.fromId === this.myPeerId) break; // es mío, ignorar
         this._broadcasting = true;
         try { _applyProjectData(data.payload, true); } catch(e) { console.error(e); }
-        this._broadcasting = false;
+        // Delay para que el MutationObserver no dispare un update de vuelta
+        setTimeout(() => { this._broadcasting = false; }, 200);
         // Si soy host, relay a todos los demás guests (excepto quien lo envió)
         if (this.isHost) {
           this._broadcastExcept(fromId, data);
